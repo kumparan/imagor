@@ -148,7 +148,7 @@ func CreateServer(args []string, funcs ...Option) (srv *server.Server) {
 			"Enable CORS")
 		serverStripQueryString = fs.Bool("server-strip-query-string", false,
 			"Enable strip query string redirection")
-		serverAccessLog = fs.Bool("server-access-log", true,
+		serverAccessLog = fs.Bool("server-access-log", false,
 			"Enable server access log")
 
 		prometheusBind = fs.String("prometheus-bind", "", "Specify address and port to enable Prometheus metrics, e.g. :5000, prom:7000")
