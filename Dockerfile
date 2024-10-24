@@ -63,7 +63,7 @@ RUN DEBIAN_FRONTEND=noninteractive \
   libwebp7 libwebpmux3 libwebpdemux2 libtiff6 libexif12 libxml2 libpoppler-glib8 \
   libpango1.0-0 libmatio11 libopenslide0 libopenjp2-7 libjemalloc2 \
   libgsf-1-114 libfftw3-bin liborc-0.4-0 librsvg2-2 libcfitsio10 libimagequant0 libaom3 libheif1 \
-  libspng0 libcgif0 && \
+  libspng0 libcgif0 wget && \
   ln -s /usr/lib/$(uname -m)-linux-gnu/libjemalloc.so.2 /usr/local/lib/libjemalloc.so && \
   apt-get autoremove -y && \
   apt-get autoclean && \
@@ -77,6 +77,9 @@ ENV MALLOC_ARENA_MAX=2
 ENV LD_PRELOAD=/usr/local/lib/libjemalloc.so
 
 ENV PORT 8000
+
+RUN wget https://yw-assets.s3-ap-southeast-1.amazonaws.com/Heebo/Heebo-Bold.ttf -P /usr/share/fonts/googlefonts
+RUN fc-cache -f -v
 
 # use unprivileged user
 USER nobody
