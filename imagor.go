@@ -242,6 +242,8 @@ func (app *Imagor) ServeBlob(
 
 // Do executes imagor operations
 func (app *Imagor) Do(r *http.Request, p imagorpath.Params) (blob *Blob, err error) {
+	fmt.Println("MASUK DO GA")
+	app.Logger.Info("ATAU HARUS PAKE zap ", zap.String("path", p.Path))
 	var ctx = withContext(r.Context())
 	var cancel func()
 	if app.RequestTimeout > 0 {
@@ -333,10 +335,11 @@ func (app *Imagor) Do(r *http.Request, p imagorpath.Params) (blob *Blob, err err
 		}
 	}
 	load := func(image string) (*Blob, error) {
-		blob, _, err := app.loadStorage(r, image)
+		blob, _, err := app.loadStorage(r, image, false)
 		return blob, err
 	}
 	return app.suppress(ctx, resultKey, func(ctx context.Context, cb func(*Blob, error)) (*Blob, error) {
+		fmt.Println("SEBELUM RAW")
 		if resultKey != "" && !isRaw {
 			if blob := app.loadResult(r, resultKey, p.Image); blob != nil {
 				return blob, nil
@@ -362,12 +365,16 @@ func (app *Imagor) Do(r *http.Request, p imagorpath.Params) (blob *Blob, err err
 			defer app.sema.Release(1)
 		}
 		var shouldSave bool
-		if blob, shouldSave, err = app.loadStorage(r, p.Image); err != nil {
+		if blob, shouldSave, err = app.loadStorage(r, p.Image, p.IsBase64); err != nil {
 			if app.Debug {
 				app.Logger.Debug("load", zap.Any("params", p), zap.Error(err))
 			}
+			fmt.Println("ERROR ", err)
 			return blob, err
 		}
+		fmt.Println("SHOULD SAVE", shouldSave)
+		fmt.Println("SHOULD blob ", blob)
+
 		var doneSave chan struct{}
 		if shouldSave {
 			doneSave = make(chan struct{})
@@ -376,11 +383,13 @@ func (app *Imagor) Do(r *http.Request, p imagorpath.Params) (blob *Blob, err err
 				storageKey = app.StoragePathStyle.Hash(p.Image)
 			}
 			go func(blob *Blob) {
+				fmt.Println("STORAGE", storageKey)
 				app.save(ctx, app.Storages, storageKey, blob)
 				close(doneSave)
 			}(blob)
 		}
 		if isBlobEmpty(blob) {
+			fmt.Println("IS BLOB EMPTY")
 			return blob, err
 		}
 		if !isRaw {
@@ -490,10 +499,10 @@ func fromStorages(
 	return
 }
 
-func (app *Imagor) loadStorage(r *http.Request, key string) (blob *Blob, shouldSave bool, err error) {
+func (app *Imagor) loadStorage(r *http.Request, key string, isBase64 bool) (blob *Blob, shouldSave bool, err error) {
 	r = app.requestWithLoadContext(r)
 	var origin Storage
-	blob, origin, err = app.fromStoragesAndLoaders(r, app.Storages, app.Loaders, key)
+	blob, origin, err = app.fromStoragesAndLoaders(r, app.Storages, app.Loaders, key, isBase64)
 	if !isBlobEmpty(blob) && origin == nil &&
 		key != "" && err == nil && len(app.Storages) > 0 {
 		shouldSave = true
@@ -502,9 +511,10 @@ func (app *Imagor) loadStorage(r *http.Request, key string) (blob *Blob, shouldS
 }
 
 func (app *Imagor) fromStoragesAndLoaders(
-	r *http.Request, storages []Storage, loaders []Loader, image string,
+	r *http.Request, storages []Storage, loaders []Loader, image string, isBase64 bool,
 ) (blob *Blob, origin Storage, err error) {
-	if image == "" {
+	fmt.Println("IMAGE : ", image)
+	if image == "" && !isBase64 {
 		ref := mustContextRef(r.Context())
 		if ref.Blob == nil {
 			err = ErrNotFound
@@ -514,16 +524,20 @@ func (app *Imagor) fromStoragesAndLoaders(
 		return
 	}
 	var storageKey = image
+	fmt.Println("STORAGEPATHSTYLE ", app.StoragePathStyle)
 	if app.StoragePathStyle != nil {
 		storageKey = app.StoragePathStyle.Hash(image)
 	}
 	if storageKey != "" {
+		fmt.Println("MASUK STORAGEKEY ", storageKey)
 		blob, origin, err = fromStorages(r, storages, storageKey)
 		if !isBlobEmpty(blob) && origin != nil && err == nil {
 			return
 		}
 	}
+	fmt.Println("LOADERS ")
 	for _, loader := range loaders {
+		fmt.Println(loader)
 		b, e := checkBlob(loader.Get(r, image))
 		if !isBlobEmpty(b) {
 			blob = b

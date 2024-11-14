@@ -1,14 +1,16 @@
 module github.com/cshum/imagor
 
-go 1.22
+go 1.22.1
 
-toolchain go1.22.1
+toolchain go1.23.0
 
 require (
 	cloud.google.com/go/storage v1.43.0
 	github.com/aws/aws-sdk-go v1.55.5
+	github.com/disintegration/imaging v1.6.2
 	github.com/fsouza/fake-gcs-server v1.49.3
 	github.com/johannesboyne/gofakes3 v0.0.0-20240701191259-edd0227ffc37
+	github.com/kumparan/bimg v1.0.19
 	github.com/peterbourgon/ff/v3 v3.4.0
 	github.com/prometheus/client_golang v1.20.2
 	github.com/rs/cors v1.11.0
@@ -16,6 +18,7 @@ require (
 	go.uber.org/zap v1.27.0
 	golang.org/x/image v0.19.0
 	golang.org/x/sync v0.8.0
+	willnorris.com/go/gifresize v1.0.0
 )
 
 require (

@@ -1,6 +1,7 @@
 package imagorpath
 
 import (
+	"fmt"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -39,6 +40,8 @@ var paramsRegex = regexp.MustCompile(
 		"((top|bottom|middle)/)?" +
 		// smart
 		"(smart/)?" +
+		// base64
+		"(base64/)?" +
 		// filters and image
 		"(.+)?",
 )
@@ -133,6 +136,10 @@ func Apply(p Params, path string) Params {
 	}
 	index++
 	if match[index] != "" {
+		p.IsBase64 = true
+	}
+	index++
+	if match[index] != "" {
 		filters, img := parseFilters(match[index])
 		p.Filters = append(p.Filters, filters...)
 		if img != "" {
@@ -142,6 +149,7 @@ func Apply(p Params, path string) Params {
 			}
 		}
 	}
+	fmt.Println("BASE64 VALUE ", p.IsBase64)
 	return p
 }
 
