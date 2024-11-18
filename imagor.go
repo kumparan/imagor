@@ -25,11 +25,6 @@ import (
 // Version imagor version
 const Version = "1.4.15"
 
-// FileBody to handle base64 image
-type FileBody struct {
-	File string `json:"file"`
-}
-
 // Loader image loader interface
 type Loader interface {
 	Get(r *http.Request, key string) (*Blob, error)
@@ -476,18 +471,25 @@ func (app *Imagor) loadResult(r *http.Request, resultKey, imageKey string) *Blob
 }
 
 func (app *Imagor) handleBase64(r *http.Request) (blob *Blob, err error) {
-	var f FileBody
-	err = json.NewDecoder(r.Body).Decode(&f)
+	type supportedJSONField struct {
+		Base64 string `json:"base64"`
+	}
+
+	jsonField := new(supportedJSONField)
+	err = json.NewDecoder(r.Body).Decode(&jsonField)
 	if err != nil {
 		return nil, err
 	}
 
-	// only retrieve the base 64 without the filetype e.g. data:image/jpeg
-	b64data := f.File[strings.IndexByte(f.File, ',')+1:]
-	data, err := base64.RawStdEncoding.DecodeString(b64data)
-	if err != nil {
-		return nil, err
+	if jsonField.Base64 == "" {
+		return nil, ErrNotFound
 	}
+	base64Str := jsonField.Base64
+	base64Split := strings.Split(jsonField.Base64, "base64,")
+	if len(base64Split) > 1 {
+		base64Str = base64Split[1]
+	}
+	data, err := base64.StdEncoding.DecodeString(base64Str)
 
 	mimeType := http.DetectContentType(data)
 	blob = NewBlobFromBytes(data)
