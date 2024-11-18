@@ -2,6 +2,7 @@ package imagor
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,11 @@ import (
 
 // Version imagor version
 const Version = "1.4.15"
+
+// FileBody to handle base64 image
+type FileBody struct {
+	File string `json:"file"`
+}
 
 // Loader image loader interface
 type Loader interface {
@@ -148,10 +154,6 @@ func (app *Imagor) Shutdown(ctx context.Context) (err error) {
 
 // ServeHTTP implements http.Handler for imagor operations
 func (app *Imagor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
 	path := r.URL.EscapedPath()
 	if path == "/" || path == "" {
 		if app.BasePathRedirect == "" {
@@ -242,8 +244,6 @@ func (app *Imagor) ServeBlob(
 
 // Do executes imagor operations
 func (app *Imagor) Do(r *http.Request, p imagorpath.Params) (blob *Blob, err error) {
-	fmt.Println("MASUK DO GA")
-	app.Logger.Info("ATAU HARUS PAKE zap ", zap.String("path", p.Path))
 	var ctx = withContext(r.Context())
 	var cancel func()
 	if app.RequestTimeout > 0 {
@@ -339,7 +339,6 @@ func (app *Imagor) Do(r *http.Request, p imagorpath.Params) (blob *Blob, err err
 		return blob, err
 	}
 	return app.suppress(ctx, resultKey, func(ctx context.Context, cb func(*Blob, error)) (*Blob, error) {
-		fmt.Println("SEBELUM RAW")
 		if resultKey != "" && !isRaw {
 			if blob := app.loadResult(r, resultKey, p.Image); blob != nil {
 				return blob, nil
@@ -369,11 +368,8 @@ func (app *Imagor) Do(r *http.Request, p imagorpath.Params) (blob *Blob, err err
 			if app.Debug {
 				app.Logger.Debug("load", zap.Any("params", p), zap.Error(err))
 			}
-			fmt.Println("ERROR ", err)
 			return blob, err
 		}
-		fmt.Println("SHOULD SAVE", shouldSave)
-		fmt.Println("SHOULD blob ", blob)
 
 		var doneSave chan struct{}
 		if shouldSave {
@@ -383,13 +379,11 @@ func (app *Imagor) Do(r *http.Request, p imagorpath.Params) (blob *Blob, err err
 				storageKey = app.StoragePathStyle.Hash(p.Image)
 			}
 			go func(blob *Blob) {
-				fmt.Println("STORAGE", storageKey)
 				app.save(ctx, app.Storages, storageKey, blob)
 				close(doneSave)
 			}(blob)
 		}
 		if isBlobEmpty(blob) {
-			fmt.Println("IS BLOB EMPTY")
 			return blob, err
 		}
 		if !isRaw {
@@ -481,6 +475,26 @@ func (app *Imagor) loadResult(r *http.Request, resultKey, imageKey string) *Blob
 	return nil
 }
 
+func (app *Imagor) handleBase64(r *http.Request) (blob *Blob, err error) {
+	var f FileBody
+	err = json.NewDecoder(r.Body).Decode(&f)
+	if err != nil {
+		return nil, err
+	}
+
+	// only retrieve the base 64 without the filetype e.g. data:image/jpeg
+	b64data := f.File[strings.IndexByte(f.File, ',')+1:]
+	data, err := base64.RawStdEncoding.DecodeString(b64data)
+	if err != nil {
+		return nil, err
+	}
+
+	mimeType := http.DetectContentType(data)
+	blob = NewBlobFromBytes(data)
+	blob.SetContentType(mimeType)
+	return blob, nil
+}
+
 func fromStorages(
 	r *http.Request, storages []Storage, key string,
 ) (blob *Blob, origin Storage, err error) {
@@ -513,7 +527,6 @@ func (app *Imagor) loadStorage(r *http.Request, key string, isBase64 bool) (blob
 func (app *Imagor) fromStoragesAndLoaders(
 	r *http.Request, storages []Storage, loaders []Loader, image string, isBase64 bool,
 ) (blob *Blob, origin Storage, err error) {
-	fmt.Println("IMAGE : ", image)
 	if image == "" && !isBase64 {
 		ref := mustContextRef(r.Context())
 		if ref.Blob == nil {
@@ -524,20 +537,22 @@ func (app *Imagor) fromStoragesAndLoaders(
 		return
 	}
 	var storageKey = image
-	fmt.Println("STORAGEPATHSTYLE ", app.StoragePathStyle)
 	if app.StoragePathStyle != nil {
 		storageKey = app.StoragePathStyle.Hash(image)
 	}
 	if storageKey != "" {
-		fmt.Println("MASUK STORAGEKEY ", storageKey)
 		blob, origin, err = fromStorages(r, storages, storageKey)
 		if !isBlobEmpty(blob) && origin != nil && err == nil {
 			return
 		}
 	}
-	fmt.Println("LOADERS ")
+	if isBase64 {
+		blob, err = app.handleBase64(r)
+		if !isBlobEmpty(blob) && err == nil {
+			return
+		}
+	}
 	for _, loader := range loaders {
-		fmt.Println(loader)
 		b, e := checkBlob(loader.Get(r, image))
 		if !isBlobEmpty(b) {
 			blob = b
