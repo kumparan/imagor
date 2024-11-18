@@ -1,7 +1,6 @@
 package imagorpath
 
 import (
-	"fmt"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -149,7 +148,6 @@ func Apply(p Params, path string) Params {
 			}
 		}
 	}
-	fmt.Println("BASE64 VALUE ", p.IsBase64)
 	return p
 }
 
