@@ -37,7 +37,7 @@ RUN DEBIAN_FRONTEND=noninteractive \
   rm -rf /usr/local/lib/*.a && \
   rm -rf /usr/local/lib/*.la
 
-WORKDIR ${GOPATH}/src/github.com/cshum/imagor
+WORKDIR ${GOPATH}/src/github.com/kumparan/imagor
 
 COPY go.mod .
 COPY go.sum .

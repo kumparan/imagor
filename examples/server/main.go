@@ -1,12 +1,12 @@
 package main
 
 import (
-	"github.com/cshum/imagor"
-	"github.com/cshum/imagor/imagorpath"
-	"github.com/cshum/imagor/loader/httploader"
-	"github.com/cshum/imagor/server"
-	"github.com/cshum/imagor/storage/filestorage"
-	"github.com/cshum/imagor/vips"
+	"github.com/kumparan/imagor"
+	"github.com/kumparan/imagor/imagorpath"
+	"github.com/kumparan/imagor/loader/httploader"
+	"github.com/kumparan/imagor/server"
+	"github.com/kumparan/imagor/storage/filestorage"
+	"github.com/kumparan/imagor/vips"
 	"go.uber.org/zap"
 )
 

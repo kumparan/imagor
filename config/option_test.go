@@ -2,7 +2,7 @@ package config
 
 import (
 	"flag"
-	"github.com/cshum/imagor"
+	"github.com/kumparan/imagor"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	"testing"

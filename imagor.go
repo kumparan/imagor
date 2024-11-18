@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cshum/imagor/imagorpath"
+	"github.com/kumparan/imagor/imagorpath"
 	"go.uber.org/zap"
 	"golang.org/x/sync/semaphore"
 	"golang.org/x/sync/singleflight"

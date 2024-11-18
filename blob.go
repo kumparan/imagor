@@ -3,8 +3,8 @@ package imagor
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/cshum/imagor/fanoutreader"
-	"github.com/cshum/imagor/seekstream"
+	"github.com/kumparan/imagor/fanoutreader"
+	"github.com/kumparan/imagor/seekstream"
 	"io"
 	"net/http"
 	"os"

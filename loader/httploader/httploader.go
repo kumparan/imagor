@@ -15,7 +15,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/cshum/imagor"
+	"github.com/kumparan/imagor"
 )
 
 // AllowedSource represents a source the HTTPLoader is allowed to load from.

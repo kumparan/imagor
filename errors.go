@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/cshum/imagor/imagorpath"
+	"github.com/kumparan/imagor/imagorpath"
 )
 
 var (
