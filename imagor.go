@@ -149,6 +149,10 @@ func (app *Imagor) Shutdown(ctx context.Context) (err error) {
 
 // ServeHTTP implements http.Handler for imagor operations
 func (app *Imagor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
 	path := r.URL.EscapedPath()
 	if path == "/" || path == "" {
 		if app.BasePathRedirect == "" {
@@ -476,7 +480,7 @@ func (app *Imagor) handleBase64(r *http.Request) (blob *Blob, err error) {
 	}
 
 	jsonField := new(supportedJSONField)
-	err = json.NewDecoder(r.Body).Decode(&jsonField)
+	err = json.NewDecoder(r.Body).Decode(jsonField)
 	if err != nil {
 		return nil, err
 	}
