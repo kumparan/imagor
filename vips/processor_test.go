@@ -48,14 +48,14 @@ func TestProcessor(t *testing.T) {
 	t.Run("vips basic", func(t *testing.T) {
 		var resultDir = filepath.Join(testDataDir, "golden")
 		doGoldenTests(t, resultDir, []test{
-			//{name: "png", path: "gopher-front.png"},
-			//{name: "jpeg", path: "fit-in/100x100/demo1.jpg"},
-			//{name: "webp", path: "fit-in/100x100/demo3.webp", arm64Golden: true},
-			//{name: "tiff", path: "fit-in/100x100/gopher.tiff"},
+			{name: "png", path: "gopher-front.png"},
+			{name: "jpeg", path: "fit-in/100x100/demo1.jpg"},
+			{name: "webp", path: "fit-in/100x100/demo3.webp", arm64Golden: true},
+			{name: "tiff", path: "fit-in/100x100/gopher.tiff"},
 			//{name: "avif", path: "fit-in/100x100/gopher-front.avif", checkTypeOnly: true},
 			{name: "export gif", path: "filters:format(gif):quality(70)/gopher-front.png"},
-			//{name: "export webp", path: "filters:format(webp):quality(70)/gopher-front.png", arm64Golden: true},
-			//{name: "export tiff", path: "filters:format(tiff):quality(70)/gopher-front.png"},
+			{name: "export webp", path: "filters:format(webp):quality(70)/gopher-front.png", arm64Golden: true},
+			{name: "export tiff", path: "filters:format(tiff):quality(70)/gopher-front.png"},
 			//{name: "export avif", path: "filters:format(avif):quality(70)/gopher-front.png", checkTypeOnly: true},
 			//{name: "export heif", path: "filters:format(heif):quality(70)/gopher-front.png", checkTypeOnly: true},
 		}, WithDebug(true), WithLogger(zap.NewExample()))
@@ -82,7 +82,7 @@ func TestProcessor(t *testing.T) {
 			{name: "jpeg", path: "fit-in/67x67/demo1.jpg"},
 			{name: "webp", path: "fit-in/67x67/demo3.webp", arm64Golden: true},
 			{name: "tiff", path: "fit-in/67x67/gopher.tiff"},
-			{name: "gif", path: "fit-in/67x67/dancing-banana.gif", checkTypeOnly: true},
+			{name: "tiff", path: "fit-in/67x67/dancing-banana.gif"},
 			//{name: "avif", path: "fit-in/67x67/gopher-front.avif", checkTypeOnly: true},
 		}, WithDebug(true), WithStripMetadata(true), WithLogger(zap.NewExample()))
 	})
@@ -93,7 +93,7 @@ func TestProcessor(t *testing.T) {
 			{name: "jpeg", path: "fit-in/67x67/filters:strip_metadata()/demo1.jpg"},
 			{name: "webp", path: "fit-in/67x67/filters:strip_metadata()/demo3.webp", arm64Golden: true},
 			{name: "tiff", path: "fit-in/67x67/filters:strip_metadata()/gopher.tiff"},
-			{name: "gif", path: "fit-in/67x67/filters:strip_metadata()/dancing-banana.gif", checkTypeOnly: true},
+			{name: "gif", path: "fit-in/67x67/filters:strip_metadata()/dancing-banana.gif"},
 			//{name: "avif", path: "fit-in/67x67/filters:strip_metadata()/gopher-front.avif", checkTypeOnly: true},
 		}, WithDebug(true), WithLogger(zap.NewExample()))
 	})
@@ -123,7 +123,7 @@ func TestProcessor(t *testing.T) {
 			{name: "proportion", path: "filters:proportion(10)/gopher.png"},
 			{name: "proportion float", path: "filters:proportion(0.1)/gopher.png"},
 			{name: "resize orient", path: "100x200/left/filters:orient(90)/gopher.png"},
-			{name: "png params", path: "200x200/filters:format(png):palette():bitdepth(4):compression(8)/gopher.png", checkTypeOnly: true},
+			{name: "png params", path: "200x200/filters:format(png):palette():bitdepth(4):compression(8)/gopher.png"},
 			{name: "fit-in unspecified height", path: "fit-in/50x0/filters:fill(white):format(jpg)/Canon_40D.jpg"},
 			{name: "resize unspecified height", path: "50x0/filters:fill(white):format(jpg)/Canon_40D.jpg"},
 			{name: "fit-in unspecified width", path: "fit-in/0x50/filters:fill(white):format(jpg)/Canon_40D.jpg"},
@@ -145,7 +145,7 @@ func TestProcessor(t *testing.T) {
 			{name: "blur sharpen 2", path: "200x-210/top/filters:blur(1,2):sharpen(1,2):background_color(ff0):format(jpeg):quality(70)/gopher.png"},
 			{name: "crop stretch top flip", path: "10x20:3000x5000/stretch/100x200/filters:brightness(-20):contrast(50):rgb(10,-50,30):fill(black)/gopher.png"},
 			{name: "crop-percent stretch top flip", path: "0.006120x0.008993:1.0x1.0/stretch/100x200/filters:brightness(-20):contrast(50):rgb(10,-50,30):fill(black)/gopher.png"},
-			{name: "padding rotation fill blur grayscale", path: "/fit-in/200x210/20x20/filters:rotate(90):rotate(270):rotate(180):fill(blur):grayscale()/gopher.png", checkTypeOnly: true},
+			{name: "padding rotation fill blur grayscale", path: "/fit-in/200x210/20x20/filters:rotate(90):rotate(270):rotate(180):fill(blur):grayscale()/gopher.png"},
 			{name: "fill round_corner", path: "fit-in/0x210/filters:fill(yellow):round_corner(40,60,green)/gopher.png"},
 			{name: "grayscale fill none", path: "fit-in/100x100/filters:fill(none)/2bands.png", checkTypeOnly: true},
 			{name: "trim alpha", path: "trim/find_trim_alpha.png"},
