@@ -89,10 +89,9 @@ func TestServer(t *testing.T) {
 	assert.NotEmpty(t, w.Header().Get("Vary"))
 	assert.Equal(t, "Bar", w.Header().Get("X-Foo"))
 
-	// we allow get and post
 	w = httptest.NewRecorder()
 	s.Handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "https://example.com/favicon.ico", nil))
-	assert.Equal(t, 200, w.Code)
+	assert.Equal(t, 403, w.Code)
 
 	w = httptest.NewRecorder()
 	s.Handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "https://example.com/healthcheck", nil))

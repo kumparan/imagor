@@ -23,7 +23,7 @@ func handleOk(w http.ResponseWriter, r *http.Request) {
 }
 
 func isNoopRequest(r *http.Request) bool {
-	return r.Method == http.MethodGet || r.Method == http.MethodPost && (r.URL.Path == "/healthcheck" || r.URL.Path == "/favicon.ico")
+	return r.Method == http.MethodGet && (r.URL.Path == "/healthcheck" || r.URL.Path == "/favicon.ico")
 }
 
 func (s *Server) panicHandler(next http.Handler) http.Handler {
