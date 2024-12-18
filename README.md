@@ -852,8 +852,7 @@ Usage of imagor:
   -vips-strip-metadata
         VIPS strips all metadata from the resulting image
   -vips-unlimited
-    	VIPS bypass image max resolution check and remove all denial of service limits
-        
+    	VIPS bypass image max resolution check and remove all denial of service limits 
   -sentry-dsn
         include sentry dsn to integrate imagor with sentry
 ```
