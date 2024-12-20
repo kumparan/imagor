@@ -2,7 +2,7 @@ package vips
 
 import "C"
 import (
-	"github.com/cshum/imagor/vips/pointer"
+	"github.com/kumparan/imagor/vips/pointer"
 	"io"
 	"reflect"
 	"unsafe"

@@ -76,6 +76,9 @@ func GeneratePath(p Params) string {
 	if p.Smart {
 		parts = append(parts, "smart")
 	}
+	if p.IsBase64 {
+		parts = append(parts, "base64")
+	}
 	if len(p.Filters) > 0 {
 		var filters []string
 		for _, f := range p.Filters {
