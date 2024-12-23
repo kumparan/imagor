@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cshum/imagor/metrics/prometheusmetrics"
+	"github.com/kumparan/imagor/metrics/prometheusmetrics"
 
-	"github.com/cshum/imagor"
-	"github.com/cshum/imagor/imagorpath"
-	"github.com/cshum/imagor/server"
+	"github.com/kumparan/imagor"
+	"github.com/kumparan/imagor/imagorpath"
+	"github.com/kumparan/imagor/server"
 	"github.com/peterbourgon/ff/v3"
 	"go.uber.org/zap"
 )

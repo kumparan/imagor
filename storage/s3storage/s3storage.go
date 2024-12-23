@@ -14,8 +14,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
-	"github.com/cshum/imagor"
-	"github.com/cshum/imagor/imagorpath"
+	"github.com/kumparan/imagor"
+	"github.com/kumparan/imagor/imagorpath"
 )
 
 // S3Storage AWS S3 Storage implements imagor.Storage interface

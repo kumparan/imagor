@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
-	"github.com/cshum/imagor"
-	"github.com/cshum/imagor/imagorpath"
-	"github.com/cshum/imagor/loader/httploader"
-	"github.com/cshum/imagor/vips"
+	"github.com/kumparan/imagor"
+	"github.com/kumparan/imagor/imagorpath"
+	"github.com/kumparan/imagor/loader/httploader"
+	"github.com/kumparan/imagor/vips"
 	"io"
 	"net/http"
 	"os"

@@ -1,4 +1,4 @@
-module github.com/cshum/imagor
+module github.com/kumparan/imagor
 
 go 1.22
 
