@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"github.com/kumparan/imagor/fanoutreader"
-	"github.com/kumparan/imagor/seekstream"
 	"io"
 	"net/http"
 	"os"
@@ -13,6 +11,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kumparan/imagor/fanoutreader"
+	"github.com/kumparan/imagor/seekstream"
 )
 
 // BlobType blob content type
@@ -150,19 +151,23 @@ func NewEmptyBlob() *Blob {
 	return &Blob{}
 }
 
-var jpegHeader = []byte("\xFF\xD8\xFF")
-var gifHeader = []byte("\x47\x49\x46")
-var webpHeader = []byte("\x57\x45\x42\x50")
-var pngHeader = []byte("\x89\x50\x4E\x47")
-var bmpHeader = []byte("BM")
-var pdfHeader = []byte("\x25\x50\x44\x46")
+var (
+	jpegHeader = []byte("\xFF\xD8\xFF")
+	gifHeader  = []byte("\x47\x49\x46")
+	webpHeader = []byte("\x57\x45\x42\x50")
+	pngHeader  = []byte("\x89\x50\x4E\x47")
+	bmpHeader  = []byte("BM")
+	pdfHeader  = []byte("\x25\x50\x44\x46")
+)
 
 // https://github.com/strukturag/libheif/blob/master/libheif/heif.cc
-var ftyp = []byte("ftyp")
-var heic = []byte("heic")
-var mif1 = []byte("mif1")
-var msf1 = []byte("msf1")
-var avif = []byte("avif")
+var (
+	ftyp = []byte("ftyp")
+	heic = []byte("heic")
+	mif1 = []byte("mif1")
+	msf1 = []byte("msf1")
+	avif = []byte("avif")
+)
 
 // Jp2 matches a JPEG 2000 Image file (ISO 15444-1).
 var jp2 = []byte{0x6a, 0x70, 0x32, 0x20}
@@ -173,8 +178,10 @@ var jpx = []byte{0x6a, 0x70, 0x78, 0x20}
 // Jpm matches a JPEG 2000 Image file (ISO 15444-6).
 var jpm = []byte{0x6a, 0x70, 0x6D, 0x20}
 
-var tifII = []byte("\x49\x49\x2A\x00")
-var tifMM = []byte("\x4D\x4D\x00\x2A")
+var (
+	tifII = []byte("\x49\x49\x2A\x00")
+	tifMM = []byte("\x4D\x4D\x00\x2A")
+)
 
 var jsonPrefix = []byte(`{"`)
 var (
