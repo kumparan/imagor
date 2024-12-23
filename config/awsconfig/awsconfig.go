@@ -6,8 +6,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/cshum/imagor"
-	"github.com/cshum/imagor/storage/s3storage"
+	"github.com/kumparan/imagor"
+	"github.com/kumparan/imagor/storage/s3storage"
 	"go.uber.org/zap"
 )
 

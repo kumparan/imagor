@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/cshum/imagor/imagorpath"
+	"github.com/kumparan/imagor/imagorpath"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -41,8 +41,8 @@ func TestWithUnsafe(t *testing.T) {
 	w = httptest.NewRecorder()
 	app.ServeHTTP(w, httptest.NewRequest(
 		http.MethodPost, "https://example.com/unsafe/foo.jpg", nil))
-	assert.Equal(t, 405, w.Code)
-	assert.Equal(t, "", w.Body.String())
+	assert.Equal(t, 200, w.Code)
+	assert.Equal(t, "foo", w.Body.String())
 
 	w = httptest.NewRecorder()
 	app.ServeHTTP(w, httptest.NewRequest(

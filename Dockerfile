@@ -44,7 +44,7 @@ RUN echo "deb http://deb.debian.org/debian bookworm-backports main" > /etc/apt/s
   rm -rf /usr/local/lib/*.a && \
   rm -rf /usr/local/lib/*.la
 
-WORKDIR ${GOPATH}/src/github.com/cshum/imagor
+WORKDIR ${GOPATH}/src/github.com/kumparan/imagor
 
 COPY go.mod .
 COPY go.sum .
@@ -73,7 +73,7 @@ RUN echo "deb http://deb.debian.org/debian bookworm-backports main" > /etc/apt/s
   libwebp7 libwebpmux3 libwebpdemux2 libtiff6 libexif12 libxml2 libpoppler-glib8 \
   libpango1.0-0 libmatio11 libopenslide0 libopenjp2-7 libjemalloc2 \
   libgsf-1-114 libfftw3-bin liborc-0.4-0 librsvg2-2 libcfitsio10 libimagequant0 libaom3 \
-  libspng0 libcgif0 && \
+  libspng0 libcgif0 wget && \
   apt-get install --no-install-recommends -y -t bookworm-backports libheif1 libheif-plugin-x265 libheif-plugin-aomenc libjxl0.7 && \
   # Conditionally install ImageMagick runtime
   if [ "$ENABLE_MAGICK" = "true" ]; then \
@@ -92,6 +92,9 @@ ENV MALLOC_ARENA_MAX=2
 ENV LD_PRELOAD=/usr/local/lib/libjemalloc.so
 
 ENV PORT 8000
+
+RUN wget https://yw-assets.s3-ap-southeast-1.amazonaws.com/Heebo/Heebo-Bold.ttf -P /usr/share/fonts/googlefonts
+RUN fc-cache -f -v
 
 # use unprivileged user
 USER nobody

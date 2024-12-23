@@ -47,6 +47,7 @@ type Params struct {
 	VAlign        string  `json:"v_align,omitempty"`
 	Smart         bool    `json:"smart,omitempty"`
 	Filters       Filters `json:"filters,omitempty"`
+	IsBase64      bool    `json:"is_base64,omitempty"`
 }
 
 // Filter imagor endpoint filter

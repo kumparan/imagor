@@ -3,8 +3,8 @@ package server
 import (
 	"context"
 	"fmt"
-	"github.com/cshum/imagor"
-	"github.com/cshum/imagor/imagorpath"
+	"github.com/kumparan/imagor"
+	"github.com/kumparan/imagor/imagorpath"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -91,7 +91,7 @@ func TestServer(t *testing.T) {
 
 	w = httptest.NewRecorder()
 	s.Handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "https://example.com/favicon.ico", nil))
-	assert.Equal(t, 405, w.Code)
+	assert.Equal(t, 403, w.Code)
 
 	w = httptest.NewRecorder()
 	s.Handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "https://example.com/healthcheck", nil))

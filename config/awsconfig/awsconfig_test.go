@@ -3,9 +3,9 @@ package awsconfig
 import (
 	"testing"
 
-	"github.com/cshum/imagor"
-	"github.com/cshum/imagor/config"
-	"github.com/cshum/imagor/storage/s3storage"
+	"github.com/kumparan/imagor"
+	"github.com/kumparan/imagor/config"
+	"github.com/kumparan/imagor/storage/s3storage"
 	"github.com/stretchr/testify/assert"
 )
 

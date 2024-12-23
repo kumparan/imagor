@@ -3,10 +3,10 @@ package vipsprocessor
 import (
 	"context"
 	"fmt"
-	"github.com/cshum/imagor"
-	"github.com/cshum/imagor/imagorpath"
-	"github.com/cshum/imagor/storage/filestorage"
 	"github.com/cshum/vipsgen/vips"
+	"github.com/kumparan/imagor"
+	"github.com/kumparan/imagor/imagorpath"
+	"github.com/kumparan/imagor/storage/filestorage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"

@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/cshum/imagor/imagorpath"
+	"github.com/kumparan/imagor/imagorpath"
 )
 
 var (
@@ -37,6 +37,8 @@ var (
 	ErrTooManyRequests = NewError("too many requests", http.StatusTooManyRequests)
 	// ErrInternal internal error
 	ErrInternal = NewError("internal error", http.StatusInternalServerError)
+	// ErrEmptyBody empty body
+	ErrEmptyBody = NewError("Empty or unreadable image", http.StatusBadRequest)
 )
 
 const errPrefix = "imagor:"

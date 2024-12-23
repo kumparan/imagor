@@ -2,6 +2,7 @@ package imagor
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cshum/imagor/imagorpath"
+	"github.com/kumparan/imagor/imagorpath"
 	"go.uber.org/zap"
 	"golang.org/x/sync/semaphore"
 	"golang.org/x/sync/singleflight"
@@ -148,7 +149,7 @@ func (app *Imagor) Shutdown(ctx context.Context) (err error) {
 
 // ServeHTTP implements http.Handler for imagor operations
 func (app *Imagor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
@@ -333,7 +334,7 @@ func (app *Imagor) Do(r *http.Request, p imagorpath.Params) (blob *Blob, err err
 		}
 	}
 	load := func(image string) (*Blob, error) {
-		blob, _, err := app.loadStorage(r, image)
+		blob, _, err := app.loadStorage(r, image, false)
 		return blob, err
 	}
 	return app.suppress(ctx, resultKey, func(ctx context.Context, cb func(*Blob, error)) (*Blob, error) {
@@ -362,12 +363,13 @@ func (app *Imagor) Do(r *http.Request, p imagorpath.Params) (blob *Blob, err err
 			defer app.sema.Release(1)
 		}
 		var shouldSave bool
-		if blob, shouldSave, err = app.loadStorage(r, p.Image); err != nil {
+		if blob, shouldSave, err = app.loadStorage(r, p.Image, p.IsBase64); err != nil {
 			if app.Debug {
 				app.Logger.Debug("load", zap.Any("params", p), zap.Error(err))
 			}
 			return blob, err
 		}
+
 		var doneSave chan struct{}
 		if shouldSave {
 			doneSave = make(chan struct{})
@@ -472,6 +474,33 @@ func (app *Imagor) loadResult(r *http.Request, resultKey, imageKey string) *Blob
 	return nil
 }
 
+func (app *Imagor) handleBase64(r *http.Request) (blob *Blob, err error) {
+	type supportedJSONField struct {
+		Base64 string `json:"base64"`
+	}
+
+	jsonField := new(supportedJSONField)
+	err = json.NewDecoder(r.Body).Decode(jsonField)
+	if err != nil {
+		return nil, err
+	}
+
+	if jsonField.Base64 == "" {
+		return nil, ErrNotFound
+	}
+	base64Str := jsonField.Base64
+	base64Split := strings.Split(jsonField.Base64, "base64,")
+	if len(base64Split) > 1 {
+		base64Str = base64Split[1]
+	}
+	data, err := base64.StdEncoding.DecodeString(base64Str)
+
+	mimeType := http.DetectContentType(data)
+	blob = NewBlobFromBytes(data)
+	blob.SetContentType(mimeType)
+	return blob, nil
+}
+
 func fromStorages(
 	r *http.Request, storages []Storage, key string,
 ) (blob *Blob, origin Storage, err error) {
@@ -490,10 +519,10 @@ func fromStorages(
 	return
 }
 
-func (app *Imagor) loadStorage(r *http.Request, key string) (blob *Blob, shouldSave bool, err error) {
+func (app *Imagor) loadStorage(r *http.Request, key string, isBase64 bool) (blob *Blob, shouldSave bool, err error) {
 	r = app.requestWithLoadContext(r)
 	var origin Storage
-	blob, origin, err = app.fromStoragesAndLoaders(r, app.Storages, app.Loaders, key)
+	blob, origin, err = app.fromStoragesAndLoaders(r, app.Storages, app.Loaders, key, isBase64)
 	if !isBlobEmpty(blob) && origin == nil &&
 		key != "" && err == nil && len(app.Storages) > 0 {
 		shouldSave = true
@@ -502,9 +531,9 @@ func (app *Imagor) loadStorage(r *http.Request, key string) (blob *Blob, shouldS
 }
 
 func (app *Imagor) fromStoragesAndLoaders(
-	r *http.Request, storages []Storage, loaders []Loader, image string,
+	r *http.Request, storages []Storage, loaders []Loader, image string, isBase64 bool,
 ) (blob *Blob, origin Storage, err error) {
-	if image == "" {
+	if image == "" && !isBase64 {
 		ref := mustContextRef(r.Context())
 		if ref.Blob == nil {
 			err = ErrNotFound
@@ -520,6 +549,12 @@ func (app *Imagor) fromStoragesAndLoaders(
 	if storageKey != "" {
 		blob, origin, err = fromStorages(r, storages, storageKey)
 		if !isBlobEmpty(blob) && origin != nil && err == nil {
+			return
+		}
+	}
+	if isBase64 {
+		blob, err = app.handleBase64(r)
+		if !isBlobEmpty(blob) && err == nil {
 			return
 		}
 	}

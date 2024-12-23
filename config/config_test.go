@@ -1,11 +1,11 @@
 package config
 
 import (
-	"github.com/cshum/imagor"
-	"github.com/cshum/imagor/imagorpath"
-	"github.com/cshum/imagor/loader/httploader"
-	"github.com/cshum/imagor/metrics/prometheusmetrics"
-	"github.com/cshum/imagor/storage/filestorage"
+	"github.com/kumparan/imagor"
+	"github.com/kumparan/imagor/imagorpath"
+	"github.com/kumparan/imagor/loader/httploader"
+	"github.com/kumparan/imagor/metrics/prometheusmetrics"
+	"github.com/kumparan/imagor/storage/filestorage"
 	"github.com/stretchr/testify/assert"
 	"net/http"
 	"testing"

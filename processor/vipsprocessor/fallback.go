@@ -1,8 +1,8 @@
 package vipsprocessor
 
 import (
-	"github.com/cshum/imagor"
 	"github.com/cshum/vipsgen/vips"
+	"github.com/kumparan/imagor"
 	"golang.org/x/image/bmp"
 	"image"
 	"image/draw"

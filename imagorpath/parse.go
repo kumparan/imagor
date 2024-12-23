@@ -39,6 +39,8 @@ var paramsRegex = regexp.MustCompile(
 		"((top|bottom|middle)/)?" +
 		// smart
 		"(smart/)?" +
+		// base64
+		"(base64/)?" +
 		// filters and image
 		"(.+)?",
 )
@@ -130,6 +132,10 @@ func Apply(p Params, path string) Params {
 	index += 2
 	if match[index] != "" {
 		p.Smart = true
+	}
+	index++
+	if match[index] != "" {
+		p.IsBase64 = true
 	}
 	index++
 	if match[index] != "" {

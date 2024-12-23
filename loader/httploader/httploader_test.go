@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cshum/imagor"
+	"github.com/kumparan/imagor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

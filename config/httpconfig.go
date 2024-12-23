@@ -4,8 +4,8 @@ import (
 	"flag"
 	"net"
 
-	"github.com/cshum/imagor"
-	"github.com/cshum/imagor/loader/httploader"
+	"github.com/kumparan/imagor"
+	"github.com/kumparan/imagor/loader/httploader"
 	"go.uber.org/zap"
 )
 

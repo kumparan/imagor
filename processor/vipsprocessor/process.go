@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cshum/imagor"
-	"github.com/cshum/imagor/imagorpath"
+	"github.com/kumparan/imagor"
+	"github.com/kumparan/imagor/imagorpath"
 	"go.uber.org/zap"
 )
 

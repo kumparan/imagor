@@ -2,7 +2,7 @@ package vipsprocessor
 
 import (
 	"context"
-	"github.com/cshum/imagor"
+	"github.com/kumparan/imagor"
 	"github.com/cshum/vipsgen/vips"
 	"github.com/stretchr/testify/assert"
 	"runtime"
