@@ -106,6 +106,7 @@ func (s *Server) accessLogHandler(next http.Handler) http.Handler {
 			zap.String("ip", RealIP(r)),
 			zap.String("user-agent", r.UserAgent()),
 			zap.Duration("took", time.Since(start)),
+			zap.Int64("took_in_ms", time.Since(start).Milliseconds()),
 		)
 	})
 }
