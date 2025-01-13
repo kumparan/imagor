@@ -6,6 +6,8 @@ import (
 	"crypto/sha512"
 	"flag"
 	"fmt"
+	"go.uber.org/zap/zapcore"
+	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -168,7 +170,29 @@ func CreateServer(args []string, funcs ...Option) (srv *server.Server) {
 		if *debug {
 			logger = zap.Must(zap.NewDevelopment())
 		} else {
-			logger = zap.Must(zap.NewProduction())
+			encoderCfg := zap.NewProductionEncoderConfig()
+			encoderCfg.TimeKey = "@timestamp"
+			encoderCfg.EncodeTime = zapcore.RFC3339NanoTimeEncoder
+
+			config := zap.Config{
+				Level:             zap.NewAtomicLevelAt(zap.InfoLevel),
+				Development:       false,
+				DisableCaller:     false,
+				DisableStacktrace: false,
+				Sampling:          nil,
+				Encoding:          "json",
+				EncoderConfig:     encoderCfg,
+				OutputPaths: []string{
+					"stderr",
+				},
+				ErrorOutputPaths: []string{
+					"stderr",
+				},
+				InitialFields: map[string]interface{}{
+					"pid": os.Getpid(),
+				},
+			}
+			logger = zap.Must(config.Build())
 		}
 		return logger, *debug
 	}, funcs...)
