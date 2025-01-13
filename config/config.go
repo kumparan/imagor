@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"go.uber.org/zap/zapcore"
-	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -187,9 +186,6 @@ func CreateServer(args []string, funcs ...Option) (srv *server.Server) {
 				},
 				ErrorOutputPaths: []string{
 					"stderr",
-				},
-				InitialFields: map[string]interface{}{
-					"pid": os.Getpid(),
 				},
 			}
 			logger = zap.Must(config.Build())
