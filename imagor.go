@@ -530,7 +530,7 @@ func (app *Imagor) loadStorage(r *http.Request, key string, isBase64 bool) (blob
 		app.Logger.Error("fail to load from storage", zap.String("key", key), zap.Error(err))
 	}
 
-	if len(app.ImageErrorFallback) > 0 {
+	if isBlobEmpty(blob) && len(app.ImageErrorFallback) > 0 {
 		data, err := base64.StdEncoding.DecodeString(app.ImageErrorFallback)
 		app.Logger.Error("fail to load from storage", zap.String("key", key), zap.Error(err))
 
