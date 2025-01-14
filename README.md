@@ -614,6 +614,8 @@ Usage of imagor:
         imagor disable /params endpoint
   -imagor-disable-error-body
         imagor disable response body on error
+  -imagor-image-error-fallback
+        imagor image fallback in base64 when error loading image from storage
 
   -server-address string
         Server address
