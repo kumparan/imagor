@@ -227,3 +227,10 @@ func WithSigner(signer imagorpath.Signer) Option {
 		}
 	}
 }
+
+// WithImageErrorFallback with image error fallback option
+func WithImageErrorFallback(base64Image string) Option {
+	return func(app *Imagor) {
+		app.ImageErrorFallback = base64Image
+	}
+}
