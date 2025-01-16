@@ -89,6 +89,7 @@ type Imagor struct {
 	BaseParams             string
 	Logger                 *zap.Logger
 	Debug                  bool
+	ImageErrorFallback     string
 
 	g          singleflight.Group
 	sema       *semaphore.Weighted
@@ -171,7 +172,7 @@ func (app *Imagor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	blob, err := checkBlob(app.Do(r, p))
-	if err == ErrInvalid || err == ErrSignatureMismatch {
+	if errors.Is(err, ErrInvalid) || errors.Is(err, ErrSignatureMismatch) {
 		if path2, e := url.QueryUnescape(path); e == nil {
 			path = path2
 			p = imagorpath.Parse(path)
@@ -521,11 +522,25 @@ func fromStorages(
 
 func (app *Imagor) loadStorage(r *http.Request, key string, isBase64 bool) (blob *Blob, shouldSave bool, err error) {
 	r = app.requestWithLoadContext(r)
+
 	var origin Storage
 	blob, origin, err = app.fromStoragesAndLoaders(r, app.Storages, app.Loaders, key, isBase64)
 	if !isBlobEmpty(blob) && origin == nil &&
 		key != "" && err == nil && len(app.Storages) > 0 {
 		shouldSave = true
+		app.Logger.Error("fail to load from storage", zap.String("key", key), zap.Error(err))
+	}
+
+	if (err != nil || isBlobEmpty(blob)) && len(app.ImageErrorFallback) > 0 {
+		data, errDecode := base64.StdEncoding.DecodeString(app.ImageErrorFallback)
+		if errDecode != nil {
+			app.Logger.Error("failed to decode base64", zap.Error(errDecode))
+		}
+
+		mimeType := http.DetectContentType(data)
+		blob = NewBlobFromBytes(data)
+		blob.SetContentType(mimeType)
+		err = nil // reset error
 	}
 	return
 }
