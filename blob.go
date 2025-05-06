@@ -3,9 +3,6 @@ package imagor
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
-	"github.com/kumparan/imagor/fanoutreader"
-	"github.com/kumparan/imagor/seekstream"
 	"io"
 	"net/http"
 	"os"
@@ -13,6 +10,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kumparan/imagor/fanoutreader"
+	"github.com/kumparan/imagor/seekstream"
 )
 
 // BlobType blob content type
@@ -294,7 +294,7 @@ func (b *Blob) doInit() {
 		b.blobType = BlobTypeEmpty
 	}
 	if err != nil &&
-		!errors.Is(err, io.ErrUnexpectedEOF) &&
+		err != io.ErrUnexpectedEOF &&
 		err != io.EOF {
 		if b.err == nil {
 			b.err = err
