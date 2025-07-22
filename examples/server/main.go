@@ -4,9 +4,9 @@ import (
 	"github.com/kumparan/imagor"
 	"github.com/kumparan/imagor/imagorpath"
 	"github.com/kumparan/imagor/loader/httploader"
+	"github.com/kumparan/imagor/processor/vipsprocessor"
 	"github.com/kumparan/imagor/server"
 	"github.com/kumparan/imagor/storage/filestorage"
-	"github.com/kumparan/imagor/vips"
 	"go.uber.org/zap"
 )
 
@@ -18,7 +18,7 @@ func main() {
 		imagor.New(
 			imagor.WithLogger(logger),
 			imagor.WithUnsafe(true),
-			imagor.WithProcessors(vips.NewProcessor()),
+			imagor.WithProcessors(vipsprocessor.NewProcessor()),
 			imagor.WithLoaders(httploader.New()),
 			imagor.WithStorages(filestorage.New("./")),
 			imagor.WithResultStorages(filestorage.New("./")),
