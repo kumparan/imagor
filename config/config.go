@@ -13,10 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/TheZeroSlave/zapsentry"
-	"github.com/getsentry/sentry-go"
-	"go.uber.org/zap/zapcore"
-
 	"github.com/kumparan/imagor/metrics/prometheusmetrics"
 
 	"github.com/kumparan/imagor"
