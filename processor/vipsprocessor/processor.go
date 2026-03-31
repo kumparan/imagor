@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kumparan/imagor"
 	"github.com/cshum/vipsgen/vips"
+	"github.com/kumparan/imagor"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 )
@@ -486,6 +486,7 @@ func (v *Processor) CheckResolution(img *vips.Image, err error) (*vips.Image, er
 	if err != nil || img == nil {
 		return img, err
 	}
+	fmt.Println("---- unlimited ", v.Unlimited)
 	if !v.Unlimited && (img.Width() > v.MaxWidth || img.PageHeight() > v.MaxHeight ||
 		(img.Width()*img.Height()) > v.MaxResolution) {
 		img.Close()
