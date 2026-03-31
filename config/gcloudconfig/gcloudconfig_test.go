@@ -1,13 +1,14 @@
 package gcloudconfig
 
 import (
+	"os"
+	"testing"
+
 	"github.com/kumparan/imagor"
 	"github.com/kumparan/imagor/config"
 	"github.com/kumparan/imagor/storage/gcloudstorage"
 	"github.com/fsouza/fake-gcs-server/fakestorage"
 	"github.com/stretchr/testify/assert"
-	"os"
-	"testing"
 )
 
 func fakeGCSServer() *fakestorage.Server {

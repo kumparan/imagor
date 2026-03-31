@@ -6,25 +6,27 @@ import (
 	"crypto/sha512"
 	"flag"
 	"fmt"
-	"github.com/TheZeroSlave/zapsentry"
-	"github.com/getsentry/sentry-go"
-	"go.uber.org/zap/zapcore"
+	"os"
 	"runtime"
 	"strings"
 	"time"
 
-	"github.com/kumparan/imagor/metrics/prometheusmetrics"
-
+	"github.com/TheZeroSlave/zapsentry"
 	"github.com/kumparan/imagor"
 	"github.com/kumparan/imagor/imagorpath"
+	"github.com/kumparan/imagor/metrics/prometheusmetrics"
 	"github.com/kumparan/imagor/server"
+	"github.com/getsentry/sentry-go"
 	"github.com/peterbourgon/ff/v3"
+	"go.elastic.co/ecszap"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 var baseConfig = []Option{
 	withFileSystem,
-	withHTTPLoader,
+	withUploadLoader,
+	withHTTPLoader, // HTTP loader should be last as a fallback
 }
 
 // NewImagor create imagor from config flags
@@ -40,6 +42,8 @@ func NewImagor(
 			"Output WebP format automatically if browser supports")
 		imagorAutoAVIF = fs.Bool("imagor-auto-avif", false,
 			"Output AVIF format automatically if browser supports (experimental)")
+		imagorAutoJPEG = fs.Bool("imagor-auto-jpeg", false,
+			"Output JPEG format automatically if JPEG or no specific format is requested")
 		imagorRequestTimeout = fs.Duration("imagor-request-timeout",
 			time.Second*30, "Timeout for performing imagor request")
 		imagorLoadTimeout = fs.Duration("imagor-load-timeout",
@@ -66,6 +70,7 @@ func NewImagor(
 			"Check modified time of result image against the source image. This eliminates stale result but require more lookups")
 		imagorDisableErrorBody       = fs.Bool("imagor-disable-error-body", false, "imagor disable response body on error")
 		imagorDisableParamsEndpoint  = fs.Bool("imagor-disable-params-endpoint", false, "imagor disable /params endpoint")
+		imagorResponseRawOnError     = fs.Bool("imagor-response-raw-on-error", false, "imagor response with a raw unprocessed and unchecked source image on error")
 		imagorImageErrorFallback     = fs.String("imagor-image-error-fallback", "", "imagor image error fallback when failed to load from storage, in base64")
 		imagorSignerType             = fs.String("imagor-signer-type", "sha1", "imagor URL signature hasher type: sha1, sha256, sha512")
 		imagorSignerTruncate         = fs.Int("imagor-signer-truncate", 0, "imagor URL signature truncate at length")
@@ -115,9 +120,11 @@ func NewImagor(
 		imagor.WithCacheHeaderNoCache(*imagorCacheHeaderNoCache),
 		imagor.WithAutoWebP(*imagorAutoWebP),
 		imagor.WithAutoAVIF(*imagorAutoAVIF),
+		imagor.WithAutoJPEG(*imagorAutoJPEG),
 		imagor.WithModifiedTimeCheck(*imagorModifiedTimeCheck),
 		imagor.WithDisableErrorBody(*imagorDisableErrorBody),
 		imagor.WithDisableParamsEndpoint(*imagorDisableParamsEndpoint),
+		imagor.WithResponseRawOnError(*imagorResponseRawOnError),
 		imagor.WithStoragePathStyle(hasher),
 		imagor.WithResultStoragePathStyle(resultHasher),
 		imagor.WithUnsafe(*imagorUnsafe),
@@ -136,6 +143,7 @@ func CreateServer(args []string, funcs ...Option) (srv *server.Server) {
 		app    *imagor.Imagor
 
 		debug        = fs.Bool("debug", false, "Debug mode")
+		logECS       = fs.Bool("log-ecs", false, "Enable Elastic Common Schema log format")
 		version      = fs.Bool("version", false, "imagor version")
 		port         = fs.Int("port", 8000, "Server port")
 		goMaxProcess = fs.Int("gomaxprocs", 0, "GOMAXPROCS")
@@ -172,7 +180,10 @@ func CreateServer(args []string, funcs ...Option) (srv *server.Server) {
 		); err != nil {
 			panic(err)
 		}
-		if *debug {
+
+		if *logECS {
+			logger = newECSLogger(*debug, os.Stdout)
+		} else if *debug {
 			logger = zap.Must(zap.NewDevelopment())
 		} else {
 			encoderCfg := zap.NewProductionEncoderConfig()
@@ -253,4 +264,12 @@ func CreateServer(args []string, funcs ...Option) (srv *server.Server) {
 		server.WithMetrics(pm),
 		server.WithSentry(*sentryDsn),
 	)
+}
+
+func newECSLogger(debug bool, w zapcore.WriteSyncer) *zap.Logger {
+	level := zap.InfoLevel
+	if debug {
+		level = zap.DebugLevel
+	}
+	return zap.New(ecszap.NewCore(ecszap.NewDefaultEncoderConfig(), w, level), zap.AddCaller())
 }

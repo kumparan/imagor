@@ -1,9 +1,10 @@
 package gcloudconfig
 
 import (
-	"cloud.google.com/go/storage"
 	"context"
 	"flag"
+
+	"cloud.google.com/go/storage"
 	"github.com/kumparan/imagor"
 	"github.com/kumparan/imagor/storage/gcloudstorage"
 	"go.uber.org/zap"
