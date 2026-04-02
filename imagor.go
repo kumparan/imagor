@@ -175,15 +175,7 @@ func (app *Imagor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Handle POST requests only when unsafe mode and POST requests are enabled
-	if r.Method == http.MethodPost {
-		if !app.Unsafe || !app.EnablePostRequests {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		app.handlePostRequest(w, r)
-		return
-	}
+	// not using app.handlePostRequest(w, r) because kumparan has its own implementation of base64
 	path := r.URL.EscapedPath()
 	if path == "/" || path == "" {
 		if app.BasePathRedirect == "" {
