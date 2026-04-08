@@ -58,6 +58,7 @@ jobs:
   # Job 1: Preparation stage - setup environment, validate configs
   prepare:
     name: Prepare
+    needs: get-ecr-creds
     runs-on: [self-hosted]
     container:
       image: 475170104714.dkr.ecr.ap-southeast-1.amazonaws.com/amazon/aws-cli:2.0.6
@@ -127,7 +128,7 @@ jobs:
         username: AWS
         password: ${{ needs.get-ecr-creds.outputs.ecr_password }}
       options: --privileged
-    needs: prepare
+    needs: [get-ecr-creds, prepare]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
