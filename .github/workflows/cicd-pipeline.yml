@@ -1,0 +1,180 @@
+name: cicd-pipeline
+
+# CI/CD Pipeline for GitHub Actions
+# Triggers: merge to master, tag push (staging-*, sre-*), manual trigger
+# Runs on self-hosted runner with jobs: prepare, build, update vault, deploy
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - master
+  push:
+    tags:
+      - 'staging-*'
+      - 'sre-*'
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: 'Version tag (optional, for manual versioning)'
+        required: false
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Job 1: Preparation stage - setup environment, validate configs
+  prepare:
+    name: Prepare
+    runs-on: [self-hosted]
+    container:
+      image: 475170104714.dkr.ecr.ap-southeast-1.amazonaws.com/amazon/aws-cli:2.0.6
+      options: --privileged
+    outputs:
+      build_tag: ${{ steps.tag.outputs.build_tag }}
+      should_deploy: ${{ steps.check.outputs.should_deploy }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine build tag
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.version_tag }}" ]]; then
+            BUILD_TAG="${{ github.event.inputs.version_tag }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            BUILD_TAG="${{ github.ref#refs/tags/ }}"
+          else
+            BUILD_TAG="${{ github.sha }}"
+          fi
+          echo "build_tag=${BUILD_TAG}" >> $GITHUB_OUTPUT
+          echo "Build tag: ${BUILD_TAG}"
+
+      - name: Check deployment conditions
+        id: check
+        run: |
+          DEPLOY=false
+          
+          # Deploy on PR merge to master
+          if [[ "${{ github.event_name }}" == "pull_request" && "${{ github.event.pull_request.merged }}" == "true" && "${{ github.base_ref }}" == "master" ]]; then
+            DEPLOY=true
+            echo "Deployment triggered: PR merged to master"
+          fi
+          
+          # Deploy on staging-* or sre-* tags
+          if [[ "${{ github.ref }}" == refs/tags/staging-* || "${{ github.ref }}" == refs/tags/sre-* ]]; then
+            DEPLOY=true
+            echo "Deployment triggered: Tag push (staging-* or sre-*)"
+          fi
+          
+          # Manual trigger
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            DEPLOY=true
+            echo "Deployment triggered: Manual workflow_dispatch"
+          fi
+          
+          echo "should_deploy=${DEPLOY}" >> $GITHUB_OUTPUT
+
+      - name: Validate environment
+        run: |
+          echo "Validation: Checking environment setup..."
+          env | sort
+
+  # # Job 2: Build stage - compile, test, build artifacts
+  # build:
+  #   name: Build
+  #   runs-on: [self-hosted]
+  #   container:
+  #     image: 475170104714.dkr.ecr.ap-southeast-1.amazonaws.com/docker:24.0.5
+  #     options: --privileged
+  #   needs: prepare
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
+  #       with:
+  #           fetch-depth: 0
+
+  #     - name: Build Docker image
+  #       if: needs.prepare.outputs.should_deploy == 'true'
+  #       run: |
+  #         echo "Building Docker image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.build_tag }}"
+  #         # docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.build_tag }} .
+  #         # docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.build_tag }}
+
+  # # Job 3: Update Vault - store secrets and configuration
+  # update-vault:
+  #   name: Update Vault
+  #   runs-on: [self-hosted]
+  #   needs: [prepare, build]
+  #   if: needs.prepare.outputs.should_deploy == 'true'
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
+
+  #     - name: Authenticate to Vault
+  #       run: |
+  #         echo "Authenticating to Vault..."
+  #         # Add Vault authentication steps
+  #         # Example: vault login -method=github token=${{ secrets.GITHUB_TOKEN }}
+
+  #     - name: Update Vault secrets
+  #       run: |
+  #         echo "Updating Vault with build tag: ${{ needs.prepare.outputs.build_tag }}"
+  #         # Add Vault update commands here
+  #         # Examples:
+  #         # - vault kv put secret/imagor/config version=${{ needs.prepare.outputs.build_tag }}
+  #         # - vault kv put secret/imagor/build-info timestamp=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+
+  #     - name: Verify Vault updates
+  #       run: |
+  #         echo "Verifying Vault updates..."
+  #         # vault kv get secret/imagor/config
+
+  # # Job 4: Deploy stage - deploy to environments
+  # deploy:
+  #   name: Deploy
+  #   runs-on: [self-hosted]
+  #   needs: [prepare, build, update-vault]
+  #   if: needs.prepare.outputs.should_deploy == 'true'
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
+
+  #     - name: Configure deployment environment
+  #       run: |
+  #         echo "Configuring deployment environment..."
+  #         echo "Build tag: ${{ needs.prepare.outputs.build_tag }}"
+  #         # Add environment configuration commands
+
+  #     - name: Deploy to target environment
+  #       run: |
+  #         echo "Deploying application..."
+  #         # Add your deployment commands here
+  #         # Examples for Kubernetes:
+  #         # - kubectl set image deployment/imagor imagor=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.build_tag }} -n default
+  #         # 
+  #         # Examples for Helm:
+  #         # - helm upgrade --install imagor ./helm-chart --set image.tag=${{ needs.prepare.outputs.build_tag }}
+  #         #
+  #         # Examples for traditional deployment:
+  #         # - ansible-playbook deploy.yml -e "build_tag=${{ needs.prepare.outputs.build_tag }}"
+
+  #     - name: Verify deployment
+  #       run: |
+  #         echo "Verifying deployment..."
+  #         # Add health checks and verification commands
+  #         # Examples:
+  #         # - kubectl rollout status deployment/imagor -n default
+  #         # - curl -f http://localhost/health || exit 1
+
+  #     - name: Notify deployment status
+  #       if: always()
+  #       run: |
+  #         STATUS=${{ job.status }}
+  #         echo "Deployment ${STATUS}"
+  #         # Add notification commands (Slack, email, etc.)
+    
