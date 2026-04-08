@@ -22,17 +22,17 @@ on:
 
 env:
   PROJECT: "BACKEND"
-  DEPLOYER: $GITHUB_ACTOR
-  SERVICE_NAME: $GITHUB_REPOSITORY
-  IMAGE_TAG: $GITHUB_REF_NAME
+  DEPLOYER: ${{ github.actor }}
+  SERVICE_NAME: ${{ github.repository }}
+  IMAGE_TAG: ${{ github.ref_name }}
   ENV: "staging"
-  AWS_CONFIG_DIR: "$CI_PROJECT_DIR/.aws"
+  # AWS_CONFIG_DIR: "$CI_PROJECT_DIR/.aws"
 
   ### Notification Channel Slack
   CHANNEL_SLACK_STAGING: "#deployment-v4"
   CHANNEL_SLACK_PRODUCTION: "#be-deployment-production"
-  APP_VERSION: $GITHUB_REF_NAME
-  USER_DEPLOY: $GITHUB_ACTOR
+  APP_VERSION: ${{ github.ref_name }}
+  USER_DEPLOY: ${{ github.actor }}
 
 jobs:
   # Get Login ECR
@@ -57,11 +57,11 @@ jobs:
   
   # Job 1: Preparation stage - setup environment, validate configs
   prepare:
-    name: Prepare
+    name: Preparing Deployment ${{ github.repository }} - ${{ github.ref_name }}
     needs: get-ecr-creds
     runs-on: [self-hosted]
     container:
-      image: 475170104714.dkr.ecr.ap-southeast-1.amazonaws.com/amazon/aws-cli:2.0.6
+      image: ubuntu:20.04
       credentials:
         username: AWS
         password: ${{ needs.get-ecr-creds.outputs.ecr_password }}
@@ -123,7 +123,7 @@ jobs:
     name: Build
     runs-on: [self-hosted]
     container:
-      image: 475170104714.dkr.ecr.ap-southeast-1.amazonaws.com/docker:24.0.5
+      image: 475170104714.dkr.ecr.ap-southeast-1.amazonaws.com/docker:25.0.0
       credentials:
         username: AWS
         password: ${{ needs.get-ecr-creds.outputs.ecr_password }}
