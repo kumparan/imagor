@@ -23,7 +23,6 @@ on:
 env:
   PROJECT: "BACKEND"
   DEPLOYER: ${{ github.actor }}
-  SERVICE_NAME: ${{ github.repository }}
   IMAGE_TAG: ${{ github.ref_name }}
   ENV: "staging"
   # AWS_CONFIG_DIR: "$CI_PROJECT_DIR/.aws"
@@ -60,9 +59,18 @@ jobs:
     outputs:
       build_tag: ${{ steps.tag.outputs.build_tag }}
       should_deploy: ${{ steps.check.outputs.should_deploy }}
+      service_name: ${{ steps.service.outputs.service_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Extract service name from repository
+        id: service
+        run: |
+          SERVICE_NAME="${{ github.repository }}"
+          SERVICE_NAME="${SERVICE_NAME##*/}"
+          echo "service_name=${SERVICE_NAME}" >> $GITHUB_OUTPUT
+          echo "Service name: ${SERVICE_NAME}"
 
       - name: Determine build tag
         id: tag
@@ -112,6 +120,8 @@ jobs:
     name: Build
     runs-on: [self-hosted]
     needs: [get-ecr-creds, prepare]
+    env:
+      SERVICE_NAME: ${{ needs.prepare.outputs.service_name }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -119,7 +129,7 @@ jobs:
       - name: Build Docker image
         if: needs.prepare.outputs.should_deploy == 'true'
         env:
-          IMAGE_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_DEFAULT_REGION }}.amazonaws.com/${{ github.repository }}:${{ github.ref_name }}
+          IMAGE_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_DEFAULT_REGION }}.amazonaws.com/${{ env.SERVICE_NAME }}:${{ needs.prepare.outputs.build_tag }}
         run: |
           echo "Building Docker image: ${{ env.IMAGE_REGISTRY }}"
           docker build -t ${{ env.IMAGE_REGISTRY }} .
@@ -131,6 +141,8 @@ jobs:
   #   runs-on: [self-hosted]
   #   needs: [prepare, build]
   #   if: needs.prepare.outputs.should_deploy == 'true'
+  #   env:
+  #     SERVICE_NAME: ${{ needs.prepare.outputs.service_name }}
   #   steps:
   #     - name: Checkout code
   #       uses: actions/checkout@v4
@@ -144,15 +156,16 @@ jobs:
   #     - name: Update Vault secrets
   #       run: |
   #         echo "Updating Vault with build tag: ${{ needs.prepare.outputs.build_tag }}"
+  #         echo "Service: ${{ env.SERVICE_NAME }}"
   #         # Add Vault update commands here
   #         # Examples:
-  #         # - vault kv put secret/imagor/config version=${{ needs.prepare.outputs.build_tag }}
-  #         # - vault kv put secret/imagor/build-info timestamp=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+  #         # - vault kv put secret/${{ env.SERVICE_NAME }}/config version=${{ needs.prepare.outputs.build_tag }}
+  #         # - vault kv put secret/${{ env.SERVICE_NAME }}/build-info timestamp=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
 
   #     - name: Verify Vault updates
   #       run: |
   #         echo "Verifying Vault updates..."
-  #         # vault kv get secret/imagor/config
+  #         # vault kv get secret/${{ env.SERVICE_NAME }}/config
 
   # # Job 4: Deploy stage - deploy to environments
   # deploy:
@@ -160,6 +173,8 @@ jobs:
   #   runs-on: [self-hosted]
   #   needs: [prepare, build, update-vault]
   #   if: needs.prepare.outputs.should_deploy == 'true'
+  #   env:
+  #     SERVICE_NAME: ${{ needs.prepare.outputs.service_name }}
   #   steps:
   #     - name: Checkout code
   #       uses: actions/checkout@v4
@@ -167,6 +182,7 @@ jobs:
   #     - name: Configure deployment environment
   #       run: |
   #         echo "Configuring deployment environment..."
+  #         echo "Service: ${{ env.SERVICE_NAME }}"
   #         echo "Build tag: ${{ needs.prepare.outputs.build_tag }}"
   #         # Add environment configuration commands
 
@@ -175,26 +191,30 @@ jobs:
   #         echo "Deploying application..."
   #         # Add your deployment commands here
   #         # Examples for Kubernetes:
-  #         # - kubectl set image deployment/imagor imagor=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.build_tag }} -n default
+  #         # - kubectl set image deployment/${{ env.SERVICE_NAME }} ${{ env.SERVICE_NAME }}=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_DEFAULT_REGION }}.amazonaws.com/${{ github.repository }}:${{ needs.prepare.outputs.build_tag }} -n default
   #         # 
   #         # Examples for Helm:
-  #         # - helm upgrade --install imagor ./helm-chart --set image.tag=${{ needs.prepare.outputs.build_tag }}
+  #         # - helm upgrade --install ${{ env.SERVICE_NAME }} ./helm-chart --set image.tag=${{ needs.prepare.outputs.build_tag }}
   #         #
   #         # Examples for traditional deployment:
-  #         # - ansible-playbook deploy.yml -e "build_tag=${{ needs.prepare.outputs.build_tag }}"
+  #         # - ansible-playbook deploy.yml -e "service_name=${{ env.SERVICE_NAME }} build_tag=${{ needs.prepare.outputs.build_tag }}"
 
   #     - name: Verify deployment
   #       run: |
   #         echo "Verifying deployment..."
   #         # Add health checks and verification commands
   #         # Examples:
-  #         # - kubectl rollout status deployment/imagor -n default
+  #         # - kubectl rollout status deployment/${{ env.SERVICE_NAME }} -n default
   #         # - curl -f http://localhost/health || exit 1
 
   #     - name: Notify deployment status
   #       if: always()
   #       run: |
   #         STATUS=${{ job.status }}
-  #         echo "Deployment ${STATUS}"
+  #         REPO="${{ github.repository }}"
+  #         BRANCH="${{ github.ref_name }}"
+  #         SERVICE="${{ env.SERVICE_NAME }}"
+  #         BUILD_TAG="${{ needs.prepare.outputs.build_tag }}"
+  #         echo "Deployment ${STATUS} - Service: ${SERVICE}, Branch: ${BRANCH}, Build: ${BUILD_TAG}"
   #         # Add notification commands (Slack, email, etc.)
     
