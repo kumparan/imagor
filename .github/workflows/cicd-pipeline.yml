@@ -41,6 +41,9 @@ jobs:
     runs-on: [self-hosted]
     container:
       image: 475170104714.dkr.ecr.ap-southeast-1.amazonaws.com/amazon/aws-cli:2.0.6
+      credentials:
+        username: AWS
+        password: ${{ secrets.ECR_REGISTRY_PASSWORD }}
       options: --privileged
     outputs:
       build_tag: ${{ steps.tag.outputs.build_tag }}
@@ -100,6 +103,9 @@ jobs:
     runs-on: [self-hosted]
     container:
       image: 475170104714.dkr.ecr.ap-southeast-1.amazonaws.com/docker:24.0.5
+      credentials:
+        username: AWS
+        password: ${{ secrets.ECR_REGISTRY_PASSWORD }}
       options: --privileged
     needs: prepare
     steps:
