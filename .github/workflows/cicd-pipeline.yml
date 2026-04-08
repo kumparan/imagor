@@ -35,6 +35,26 @@ env:
   USER_DEPLOY: $GITHUB_ACTOR
 
 jobs:
+  # Get Login ECR
+  get-ecr-creds:
+    runs-on: [self-hosted]
+    outputs:
+      ecr_password: ${{ steps.login.outputs.password }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+
+      - name: Get ECR Password
+        id: login
+        # Use amazon-ecr-login or a CLI command to output the password
+        run: |
+          PASSWORD=$(aws ecr get-login-password --region ${{ secrets.AWS_DEFAULT_REGION }})
+          echo "password=${PASSWORD}" >> "$GITHUB_OUTPUT"
+  
   # Job 1: Preparation stage - setup environment, validate configs
   prepare:
     name: Prepare
@@ -43,7 +63,7 @@ jobs:
       image: 475170104714.dkr.ecr.ap-southeast-1.amazonaws.com/amazon/aws-cli:2.0.6
       credentials:
         username: AWS
-        password: ${{ secrets.ECR_REGISTRY_PASSWORD }}
+        password: ${{ needs.get-ecr-creds.outputs.ecr_password }}
       options: --privileged
     outputs:
       build_tag: ${{ steps.tag.outputs.build_tag }}
@@ -105,7 +125,7 @@ jobs:
       image: 475170104714.dkr.ecr.ap-southeast-1.amazonaws.com/docker:24.0.5
       credentials:
         username: AWS
-        password: ${{ secrets.ECR_REGISTRY_PASSWORD }}
+        password: ${{ needs.get-ecr-creds.outputs.ecr_password }}
       options: --privileged
     needs: prepare
     steps:
@@ -113,16 +133,6 @@ jobs:
         uses: actions/checkout@v4
         with:
             fetch-depth: 0
-      
-      - name: Login to AWS ECR
-        env:
-          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
-        run: |
-          echo "Logging in to AWS ECR..."
-          apk add --no-cache aws-cli jq curl git
-          aws sts get-caller-identity
-          aws ecr get-login-password | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
 
       - name: Build Docker image
         if: needs.prepare.outputs.should_deploy == 'true'
