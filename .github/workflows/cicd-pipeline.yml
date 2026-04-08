@@ -21,8 +21,18 @@ on:
         type: string
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  PROJECT: "BACKEND"
+  DEPLOYER: $GITHUB_ACTOR
+  SERVICE_NAME: $GITHUB_REPOSITORY
+  IMAGE_TAG: $GITHUB_REF_NAME
+  ENV: "staging"
+  AWS_CONFIG_DIR: "$CI_PROJECT_DIR/.aws"
+
+  ### Notification Channel Slack
+  CHANNEL_SLACK_STAGING: "#deployment-v4"
+  CHANNEL_SLACK_PRODUCTION: "#be-deployment-production"
+  APP_VERSION: $GITHUB_REF_NAME
+  USER_DEPLOY: $GITHUB_ACTOR
 
 jobs:
   # Job 1: Preparation stage - setup environment, validate configs
@@ -84,26 +94,38 @@ jobs:
           echo "Validation: Checking environment setup..."
           env | sort
 
-  # # Job 2: Build stage - compile, test, build artifacts
-  # build:
-  #   name: Build
-  #   runs-on: [self-hosted]
-  #   container:
-  #     image: 475170104714.dkr.ecr.ap-southeast-1.amazonaws.com/docker:24.0.5
-  #     options: --privileged
-  #   needs: prepare
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #       with:
-  #           fetch-depth: 0
+  # Job 2: Build stage - compile, test, build artifacts
+  build:
+    name: Build
+    runs-on: [self-hosted]
+    container:
+      image: 475170104714.dkr.ecr.ap-southeast-1.amazonaws.com/docker:24.0.5
+      options: --privileged
+    needs: prepare
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+            fetch-depth: 0
+      
+      - name: Login to AWS ECR
+        env:
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+        run: |
+          echo "Logging in to AWS ECR..."
+          apk add --no-cache aws-cli jq curl git
+          aws sts get-caller-identity
+          aws ecr get-login-password | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
 
-  #     - name: Build Docker image
-  #       if: needs.prepare.outputs.should_deploy == 'true'
-  #       run: |
-  #         echo "Building Docker image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.build_tag }}"
-  #         # docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.build_tag }} .
-  #         # docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.build_tag }}
+      - name: Build Docker image
+        if: needs.prepare.outputs.should_deploy == 'true'
+        env:
+          IMAGE_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_DEFAULT_REGION }}.amazonaws.com/${{ github.repository }}:${{ github.ref_name }}
+        run: |
+          echo "Building Docker image: ${{ IMAGE_REGISTRY }}"
+          docker build -t ${{ IMAGE_REGISTRY }} .
+          docker push ${{ IMAGE_REGISTRY }}
 
   # # Job 3: Update Vault - store secrets and configuration
   # update-vault:
