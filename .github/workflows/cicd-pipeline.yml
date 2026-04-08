@@ -34,27 +34,9 @@ env:
   USER_DEPLOY: ${{ github.actor }}
 
 jobs:
-  # Get Login ECR
-  get-ecr-creds:
-    runs-on: [self-hosted]
-    outputs:
-      ecr_password: ${{ steps.login.outputs.password }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
-
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v1
-  
   # Job 1: Preparation stage - setup environment, validate configs
   prepare:
     name: Preparing Deployment ${{ github.repository }} - ${{ github.ref_name }}
-    needs: get-ecr-creds
     runs-on: [self-hosted]
     outputs:
       build_tag: ${{ steps.tag.outputs.build_tag }}
@@ -119,17 +101,29 @@ jobs:
   build:
     name: Build
     runs-on: [self-hosted]
-    needs: [get-ecr-creds, prepare]
+    needs: [prepare]
     env:
       SERVICE_NAME: ${{ needs.prepare.outputs.service_name }}
+      BUILD_TAG: ${{ needs.prepare.outputs.build_tag }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
       - name: Build Docker image
         if: needs.prepare.outputs.should_deploy == 'true'
         env:
-          IMAGE_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_DEFAULT_REGION }}.amazonaws.com/${{ env.SERVICE_NAME }}:${{ needs.prepare.outputs.build_tag }}
+          IMAGE_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_DEFAULT_REGION }}.amazonaws.com/${{ env.SERVICE_NAME }}:${{ env.BUILD_TAG }}
         run: |
           echo "Building Docker image: ${{ env.IMAGE_REGISTRY }}"
           docker build -t ${{ env.IMAGE_REGISTRY }} .
