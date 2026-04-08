@@ -42,38 +42,27 @@ jobs:
       ecr_password: ${{ steps.login.outputs.password }}
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v1
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
 
-      - name: Get ECR Password
-        id: login
-        # Use amazon-ecr-login or a CLI command to output the password
-        run: |
-          PASSWORD=$(aws ecr get-login-password --region ${{ secrets.AWS_DEFAULT_REGION }})
-          echo "password=${PASSWORD}" >> "$GITHUB_OUTPUT"
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
   
   # Job 1: Preparation stage - setup environment, validate configs
   prepare:
     name: Preparing Deployment ${{ github.repository }} - ${{ github.ref_name }}
     needs: get-ecr-creds
     runs-on: [self-hosted]
-    container:
-      image: ubuntu:20.04
-      credentials:
-        username: AWS
-        password: ${{ needs.get-ecr-creds.outputs.ecr_password }}
-      options: --privileged
     outputs:
       build_tag: ${{ steps.tag.outputs.build_tag }}
       should_deploy: ${{ steps.check.outputs.should_deploy }}
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Determine build tag
         id: tag
@@ -122,18 +111,10 @@ jobs:
   build:
     name: Build
     runs-on: [self-hosted]
-    container:
-      image: 475170104714.dkr.ecr.ap-southeast-1.amazonaws.com/docker:25.0.0
-      credentials:
-        username: AWS
-        password: ${{ needs.get-ecr-creds.outputs.ecr_password }}
-      options: --privileged
     needs: [get-ecr-creds, prepare]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-            fetch-depth: 0
 
       - name: Build Docker image
         if: needs.prepare.outputs.should_deploy == 'true'
