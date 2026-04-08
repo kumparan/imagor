@@ -126,8 +126,8 @@ jobs:
           IMAGE_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_DEFAULT_REGION }}.amazonaws.com/${{ env.SERVICE_NAME }}:${{ env.BUILD_TAG }}
         run: |
           echo "Building Docker image: ${{ env.IMAGE_REGISTRY }}"
-          docker build -t ${{ env.IMAGE_REGISTRY }} .
-          docker push ${{ env.IMAGE_REGISTRY }}
+          docker buildx build --push -t ${{ env.IMAGE_REGISTRY }} .
+          # docker push ${{ env.IMAGE_REGISTRY }}
 
   # # Job 3: Update Vault - store secrets and configuration
   # update-vault:
