@@ -57,7 +57,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.version_tag }}" ]]; then
             BUILD_TAG="${{ github.event.inputs.version_tag }}"
           elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            BUILD_TAG="${{ github.ref#refs/tags/ }}"
+            BUILD_TAG="$(echo "${{ github.ref }}" | sed 's|refs/tags/||')"
           else
             BUILD_TAG="${{ github.sha }}"
           fi
@@ -123,9 +123,9 @@ jobs:
         env:
           IMAGE_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_DEFAULT_REGION }}.amazonaws.com/${{ github.repository }}:${{ github.ref_name }}
         run: |
-          echo "Building Docker image: ${{ IMAGE_REGISTRY }}"
-          docker build -t ${{ IMAGE_REGISTRY }} .
-          docker push ${{ IMAGE_REGISTRY }}
+          echo "Building Docker image: ${{ env.IMAGE_REGISTRY }}"
+          docker build -t ${{ env.IMAGE_REGISTRY }} .
+          docker push ${{ env.IMAGE_REGISTRY }}
 
   # # Job 3: Update Vault - store secrets and configuration
   # update-vault:
