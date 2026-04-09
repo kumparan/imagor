@@ -1,16 +1,17 @@
 package gcloudstorage
 
 import (
-	"cloud.google.com/go/storage"
 	"context"
 	"errors"
-	"github.com/kumparan/imagor"
-	"github.com/kumparan/imagor/imagorpath"
 	"io"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"cloud.google.com/go/storage"
+	"github.com/kumparan/imagor"
+	"github.com/kumparan/imagor/imagorpath"
 )
 
 // GCloudStorage Google Cloud Storage implements imagor.Storage interface
@@ -36,14 +37,47 @@ func New(client *storage.Client, bucket string, options ...Option) *GCloudStorag
 	return s
 }
 
+// resolve returns the resolved (bucket, key, ok) for the given image path.
+// When Bucket is "*", the first path segment is used as the bucket name and
+// the remainder as the key — enabling dynamic bucket-from-path routing.
+func (s *GCloudStorage) resolve(image string) (bucket, key string, ok bool) {
+	if s.Bucket == "*" {
+		trimmed := strings.TrimPrefix(image, "/")
+		idx := strings.Index(trimmed, "/")
+		if idx == -1 {
+			return "", "", false
+		}
+		bucket = trimmed[:idx]
+		rest := trimmed[idx:] // e.g. "/images/photo.jpg"
+		if bucket == "" {
+			return "", "", false
+		}
+		key, ok = s.pathFromNormalized(rest)
+		return bucket, key, ok
+	}
+	key, ok = s.Path(image)
+	return s.Bucket, key, ok
+}
+
+// pathFromNormalized computes the storage key from an already-slash-prefixed path,
+// applying PathPrefix and BaseDir transformations.
+func (s *GCloudStorage) pathFromNormalized(image string) (string, bool) {
+	image = "/" + imagorpath.Normalize(strings.TrimPrefix(image, "/"), s.safeChars)
+	if !strings.HasPrefix(image, s.PathPrefix) {
+		return "", false
+	}
+	joinedPath := filepath.Join(s.BaseDir, strings.TrimPrefix(image, s.PathPrefix))
+	return strings.Trim(joinedPath, "/"), true
+}
+
 // Get implements imagor.Storage interface
 func (s *GCloudStorage) Get(r *http.Request, image string) (imageData *imagor.Blob, err error) {
 	ctx := r.Context()
-	image, ok := s.Path(image)
+	bucket, image, ok := s.resolve(image)
 	if !ok {
 		return nil, imagor.ErrInvalid
 	}
-	object := s.client.Bucket(s.Bucket).Object(image)
+	object := s.client.Bucket(bucket).Object(image)
 	attrs, err := object.Attrs(ctx)
 	if err != nil {
 		if errors.Is(err, storage.ErrObjectNotExist) {
@@ -60,10 +94,20 @@ func (s *GCloudStorage) Get(r *http.Request, image string) (imageData *imagor.Bl
 		if err = ctx.Err(); err != nil {
 			return
 		}
-		if attrs != nil {
+		// Do NOT pass size for gzip-encoded objects as attrs.Size contains the compressed size,
+		// but the GCS reader auto-decompresses on the fly, resulting in a size mismatch.
+		// This causes the fanoutreader to allocate an undersized buffer leading to truncated reads.
+		// By passing size=0, we disable the fanoutreader optimization and create new readers instead,
+		// which correctly handles the decompressed stream without size constraints.
+		if attrs != nil && attrs.ContentEncoding != "gzip" {
 			size = attrs.Size
 		}
-		reader, err = object.NewReader(context.Background())
+		reader, err = object.NewReader(ctx)
+		if err != nil || reader == nil {
+			// Explicitly return nil reader with error to prevent nil pointer dereference.
+			// NewReader can return (nil, err) if context is cancelled or GCS API fails.
+			return nil, 0, err
+		}
 		return
 	})
 	if attrs != nil {
@@ -74,12 +118,12 @@ func (s *GCloudStorage) Get(r *http.Request, image string) (imageData *imagor.Bl
 			ModifiedTime: attrs.Updated,
 		}
 	}
-	return blob, err
+	return blob, blob.Err()
 }
 
 // Put implements imagor.Storage interface
 func (s *GCloudStorage) Put(ctx context.Context, image string, blob *imagor.Blob) (err error) {
-	image, ok := s.Path(image)
+	bucket, image, ok := s.resolve(image)
 	if !ok {
 		return imagor.ErrInvalid
 	}
@@ -87,7 +131,7 @@ func (s *GCloudStorage) Put(ctx context.Context, image string, blob *imagor.Blob
 	if err != nil {
 		return err
 	}
-	objectHandle := s.client.Bucket(s.Bucket).Object(image)
+	objectHandle := s.client.Bucket(bucket).Object(image)
 	writer := objectHandle.NewWriter(ctx)
 	defer func() {
 		_ = reader.Close()
@@ -105,11 +149,11 @@ func (s *GCloudStorage) Put(ctx context.Context, image string, blob *imagor.Blob
 
 // Delete implements imagor.Storage interface
 func (s *GCloudStorage) Delete(ctx context.Context, image string) error {
-	image, ok := s.Path(image)
+	bucket, image, ok := s.resolve(image)
 	if !ok {
 		return imagor.ErrInvalid
 	}
-	return s.client.Bucket(s.Bucket).Object(image).Delete(ctx)
+	return s.client.Bucket(bucket).Object(image).Delete(ctx)
 }
 
 // Path transforms and validates image key for storage path
@@ -126,11 +170,11 @@ func (s *GCloudStorage) Path(image string) (string, bool) {
 
 // Stat implements imagor.Storage interface
 func (s *GCloudStorage) Stat(ctx context.Context, image string) (stat *imagor.Stat, err error) {
-	image, ok := s.Path(image)
+	bucket, image, ok := s.resolve(image)
 	if !ok {
 		return nil, imagor.ErrInvalid
 	}
-	object := s.client.Bucket(s.Bucket).Object(image)
+	object := s.client.Bucket(bucket).Object(image)
 	attrs, err := object.Attrs(ctx)
 	if err != nil {
 		if errors.Is(err, storage.ErrObjectNotExist) {

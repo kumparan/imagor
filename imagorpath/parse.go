@@ -1,6 +1,7 @@
 package imagorpath
 
 import (
+	"encoding/base64"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -12,7 +13,7 @@ var pathRegex = regexp.MustCompile(
 		// params
 		"(params/)?" +
 		// hash
-		"((unsafe/)|([A-Za-z0-9-_=]{8,})/)?" +
+		"((unsafe/)|([A-Za-z0-9-_=]{17,})/)?" +
 		// path
 		"(.+)?",
 )
@@ -25,8 +26,8 @@ var paramsRegex = regexp.MustCompile(
 		"(trim(:(top-left|bottom-right))?(:(\\d+))?/)?" +
 		// crop
 		"(((0?\\.)?\\d+)x((0?\\.)?\\d+):(([0-1]?\\.)?\\d+)x(([0-1]?\\.)?\\d+)/)?" +
-		// fit-in
-		"(fit-in/)?" +
+		// fit-in (adaptive-full-fit-in, adaptive-fit-in, full-fit-in, fit-in)
+		"((adaptive-full-fit-in|adaptive-fit-in|full-fit-in|fit-in)/)?" +
 		// stretch
 		"(stretch/)?" +
 		// dimensions
@@ -64,11 +65,24 @@ func Apply(p Params, path string) Params {
 	index++
 	if match[index+1] == "unsafe/" {
 		p.Unsafe = true
-	} else if len(match[index+2]) > 8 {
-		p.Hash = match[index+2]
+		index += 3
+		p.Path = match[index]
+	} else if match[index+2] != "" && len(match[index+2]) >= 17 {
+		hash := match[index+2]
+		if hash != "adaptive-full-fit-in" {
+			// It's a hash
+			p.Hash = hash
+			index += 3
+			p.Path = match[index]
+		} else {
+			// It's a fit-in keyword, include it in the path
+			index += 3
+			p.Path = hash + "/" + match[index]
+		}
+	} else {
+		index += 3
+		p.Path = match[index]
 	}
-	index += 3
-	p.Path = match[index]
 
 	match = paramsRegex.FindStringSubmatch(p.Path)
 	if len(match) == 0 {
@@ -97,8 +111,18 @@ func Apply(p Params, path string) Params {
 	index += 9
 	if match[index] != "" {
 		p.FitIn = true
+		// Check which variant was matched
+		switch match[index+1] {
+		case "adaptive-full-fit-in":
+			p.AdaptiveFitIn = true
+			p.FullFitIn = true
+		case "adaptive-fit-in":
+			p.AdaptiveFitIn = true
+		case "full-fit-in":
+			p.FullFitIn = true
+		}
 	}
-	index++
+	index += 2
 	if match[index] != "" {
 		p.Stretch = true
 	}
@@ -142,13 +166,65 @@ func Apply(p Params, path string) Params {
 		filters, img := parseFilters(match[index])
 		p.Filters = append(p.Filters, filters...)
 		if img != "" {
-			p.Image = img
 			if u, err := url.QueryUnescape(img); err == nil {
-				p.Image = u
+				img = u
 			}
+
+			if strings.HasPrefix(img, "b64:") {
+				// if image URL starts with b64: prefix, Base64 decode it according to "base64url" in RFC 4648 (Section 5).
+				result := make([]byte, base64.RawURLEncoding.DecodedLen(len(img[4:])))
+				// in case decoding fails, use original image URL (possible that filename starts with b64: prefix, but as part of the file name)
+				if _, err := base64.RawURLEncoding.Decode(result, []byte(img[4:])); err == nil {
+					img = string(result)
+					p.Base64Image = true
+				}
+			}
+			p.Image = img
 		}
 	}
 	return p
+}
+
+// SplitArgs splits filter arguments by comma, respecting parentheses nesting.
+// This allows nested filter paths with commas to work correctly.
+// Example: "path(a,b),x,y" -> ["path(a,b)", "x", "y"]
+func SplitArgs(args string) []string {
+	if args == "" {
+		return nil
+	}
+
+	var result []string
+	var s strings.Builder
+	var depth int
+
+	for _, ch := range args {
+		switch ch {
+		case '(':
+			depth++
+			s.WriteRune(ch)
+		case ')':
+			depth--
+			s.WriteRune(ch)
+		case ',':
+			if depth == 0 {
+				// Split here - comma at top level
+				result = append(result, s.String())
+				s.Reset()
+			} else {
+				// Keep comma inside parentheses
+				s.WriteRune(ch)
+			}
+		default:
+			s.WriteRune(ch)
+		}
+	}
+
+	// Add last argument
+	if s.Len() > 0 {
+		result = append(result, s.String())
+	}
+
+	return result
 }
 
 func parseFilters(str string) (filters []Filter, path string) {

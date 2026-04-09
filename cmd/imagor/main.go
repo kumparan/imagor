@@ -1,11 +1,12 @@
 package main
 
 import (
+	"os"
+
 	"github.com/kumparan/imagor/config"
 	"github.com/kumparan/imagor/config/awsconfig"
 	"github.com/kumparan/imagor/config/gcloudconfig"
 	"github.com/kumparan/imagor/config/vipsconfig"
-	"os"
 )
 
 func main() {

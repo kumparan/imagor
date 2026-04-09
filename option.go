@@ -1,9 +1,10 @@
 package imagor
 
 import (
+	"time"
+
 	"github.com/kumparan/imagor/imagorpath"
 	"go.uber.org/zap"
-	"time"
 )
 
 // Option imagor option
@@ -159,6 +160,13 @@ func WithAutoAVIF(enable bool) Option {
 	}
 }
 
+// WithAutoJPEG with auto JPEG option when JPEG or no specific format is requested
+func WithAutoJPEG(enable bool) Option {
+	return func(app *Imagor) {
+		app.AutoJPEG = enable
+	}
+}
+
 // WithBasePathRedirect with base path redirect option
 func WithBasePathRedirect(url string) Option {
 	return func(app *Imagor) {
@@ -224,6 +232,53 @@ func WithSigner(signer imagorpath.Signer) Option {
 	return func(app *Imagor) {
 		if signer != nil {
 			app.Signer = signer
+		}
+	}
+}
+
+// WithEnablePostRequests with enable POST requests option
+func WithEnablePostRequests(enable bool) Option {
+	return func(app *Imagor) {
+		app.EnablePostRequests = enable
+	}
+}
+
+// WithResponseRawOnError with response raw on error option
+func WithResponseRawOnError(enabled bool) Option {
+	return func(app *Imagor) {
+		app.ResponseRawOnError = enabled
+	}
+}
+
+// WithDetector wires d into every DetectorAdder processor in the app.
+// Passing nil is a no-op, allowing callers to unconditionally call WithDetector
+// and skip wiring when the feature is disabled.
+func WithDetector(d Detector) Option {
+	return func(app *Imagor) {
+		if d == nil {
+			return
+		}
+		for _, p := range app.Processors {
+			if s, ok := p.(DetectorAdder); ok {
+				s.AddDetector(d)
+			}
+		}
+	}
+}
+
+// WithDetectors wires multiple detectors into every DetectorAdder processor in
+// the app. Like WithDetector, nil entries are skipped.
+func WithDetectors(ds ...Detector) Option {
+	return func(app *Imagor) {
+		for _, d := range ds {
+			if d == nil {
+				continue
+			}
+			for _, p := range app.Processors {
+				if s, ok := p.(DetectorAdder); ok {
+					s.AddDetector(d)
+				}
+			}
 		}
 	}
 }

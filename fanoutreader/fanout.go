@@ -9,24 +9,25 @@ import (
 // from one data source with known total size,
 // using channel and memory buffer.
 type Fanout struct {
-	source  io.ReadCloser
-	size    int
-	current int
-	buf     []byte
-	err     error
-	lock    sync.RWMutex
-	once    sync.Once
-	readers []*reader
+	source   io.ReadCloser
+	size     int
+	current  int
+	buf      []byte
+	err      error
+	lock     sync.RWMutex
+	once     sync.Once
+	readers  []*reader
+	released bool
 }
 
 // reader io.ReadCloser spawned via Fanout
 type reader struct {
-	fanout        *Fanout
-	channel       chan []byte
-	closeChannel  chan struct{}
-	buf           []byte
-	current       int
-	readerClosed  bool
+	fanout       *Fanout
+	channel      chan []byte
+	closeChannel chan struct{}
+	buf          []byte
+	current      int
+	readerClosed bool
 }
 
 // New Fanout factory via single io.ReadCloser source with known size
@@ -48,8 +49,28 @@ func (f *Fanout) do() {
 func (f *Fanout) readAll() {
 	defer func() {
 		_ = f.source.Close()
+
+		f.lock.Lock()
+		for _, r := range f.readers {
+			if !r.readerClosed {
+				select {
+				case <-r.closeChannel:
+				default:
+					close(r.channel)
+				}
+			}
+		}
+		f.lock.Unlock()
 	}()
 	for f.current < f.size {
+		// Check if release was called before reading more data
+		f.lock.RLock()
+		released := f.released
+		f.lock.RUnlock()
+		if released {
+			break
+		}
+		
 		b := f.buf[f.current:]
 		n, e := f.source.Read(b)
 		if f.current+n > f.size {
@@ -61,6 +82,13 @@ func (f *Fanout) readAll() {
 		}
 		f.lock.Lock()
 		f.current += n
+		
+		// Check again after acquiring write lock in case Release was called
+		if f.released {
+			f.lock.Unlock()
+			break
+		}
+		
 		if e != nil {
 			if e == io.EOF {
 				e = nil
@@ -74,7 +102,8 @@ func (f *Fanout) readAll() {
 				f.size = f.current
 			}
 		}
-		readersCopy := f.readers
+		readersCopy := make([]*reader, len(f.readers))
+		copy(readersCopy, f.readers)
 		f.lock.Unlock()
 
 		var closedReaders []*reader
@@ -109,12 +138,20 @@ func (f *Fanout) readAll() {
 // NewReader spawns new io.ReadCloser
 func (f *Fanout) NewReader() io.ReadCloser {
 	r := &reader{}
-	r.channel = make(chan []byte, f.size/4096+1)
+	// Calculate buffer size based on expected chunks, but cap it
+	bufferSize := f.size/4096 + 1
+	if bufferSize > 32 {
+		bufferSize = 32
+	}
+	r.channel = make(chan []byte, bufferSize)
 	r.closeChannel = make(chan struct{})
 	r.fanout = f
 
 	f.lock.Lock()
-	r.buf = f.buf[:f.current]
+	if f.current > 0 {
+		// Give access to data that has been buffered so far
+		r.buf = f.buf[:f.current]
+	}
 	f.readers = append(f.readers, r)
 	f.lock.Unlock()
 	return r
@@ -165,6 +202,11 @@ func (r *reader) close(closeReader bool) (e error) {
 	r.fanout.lock.RUnlock()
 	r.readerClosed = closeReader
 
+	// Clear reader buffer to free memory immediately
+	if closeReader {
+		r.buf = nil
+	}
+
 	// Close channel if it's not closed yet
 	select {
 	case <-r.closeChannel:
@@ -178,4 +220,29 @@ func (r *reader) close(closeReader bool) (e error) {
 // Close implements the io.Closer interface.
 func (r *reader) Close() error {
 	return r.close(true)
+}
+
+// Release stops reading from the source early and releases resources.
+// This method is safe to call multiple times and from multiple goroutines.
+// After Release is called, no more data will be read from the source,
+// but existing readers can still access any data that was already buffered.
+func (f *Fanout) Release() error {
+	f.lock.Lock()
+	defer f.lock.Unlock()
+	
+	if f.released {
+		return nil // Already released, idempotent
+	}
+	
+	f.released = true
+	
+	// Truncate buffer to current position to free memory
+	if f.current < len(f.buf) {
+		f.buf = f.buf[:f.current]
+	}
+	
+	// Update size to current position so readers know where data ends
+	f.size = f.current
+	
+	return nil
 }

@@ -2,6 +2,7 @@ package config
 
 import (
 	"flag"
+
 	"github.com/kumparan/imagor"
 	"go.uber.org/zap"
 )

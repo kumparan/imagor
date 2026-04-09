@@ -3,12 +3,13 @@ package imagor
 import (
 	"context"
 	"errors"
-	"github.com/kumparan/imagor/imagorpath"
-	"github.com/stretchr/testify/assert"
 	"net"
 	"net/http"
 	"net/url"
 	"testing"
+
+	"github.com/kumparan/imagor/imagorpath"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestWrapError(t *testing.T) {

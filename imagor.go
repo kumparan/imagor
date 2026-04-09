@@ -23,7 +23,7 @@ import (
 )
 
 // Version imagor version
-const Version = "1.4.17"
+const Version = "1.8.3"
 
 // Loader image loader interface
 type Loader interface {
@@ -43,6 +43,23 @@ type Storage interface {
 
 	// Delete delete data Blob by key
 	Delete(ctx context.Context, key string) error
+}
+
+// Stater optional interface for loaders that support stat operations
+type Stater interface {
+	Stat(ctx context.Context, key string) (*Stat, error)
+}
+
+// Cacher is an optional Processor interface for in-memory blob caching.
+// LoadFromCache is called by imagor.Do() before loadStorage; on a hit the cached
+// blob is passed directly to Process(), skipping loader/storage I/O entirely.
+//
+// w and h are the requested output dimensions used to determine cache eligibility,
+// not to select a blob of that size. Return (nil, false) when w or h is zero
+// (unknown size) or exceeds the cache budget — the cache holds a single downscaled
+// copy per image path and cannot safely serve those requests.
+type Cacher interface {
+	LoadFromCache(key string, w, h int) (*Blob, bool)
 }
 
 // LoadFunc function handler for Processor to call loader
@@ -83,9 +100,12 @@ type Imagor struct {
 	ProcessQueueSize       int64
 	AutoWebP               bool
 	AutoAVIF               bool
+	AutoJPEG               bool
 	ModifiedTimeCheck      bool
 	DisableErrorBody       bool
 	DisableParamsEndpoint  bool
+	EnablePostRequests     bool
+	ResponseRawOnError     bool
 	BaseParams             string
 	Logger                 *zap.Logger
 	Debug                  bool
@@ -150,21 +170,37 @@ func (app *Imagor) Shutdown(ctx context.Context) (err error) {
 
 // ServeHTTP implements http.Handler for imagor operations
 func (app *Imagor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Handle POST requests only when unsafe mode and POST requests are enabled
+	if r.Method == http.MethodPost && len(app.ImageErrorFallback) == 0 {
+		if !app.Unsafe || !app.EnablePostRequests {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		app.handlePostRequest(w, r)
 		return
 	}
 	path := r.URL.EscapedPath()
 	if path == "/" || path == "" {
 		if app.BasePathRedirect == "" {
-			w.Header().Set("Content-Type", "text/html")
-			_, _ = w.Write([]byte(landing))
+			renderLandingPage(w)
 		} else {
 			http.Redirect(w, r, app.BasePathRedirect, http.StatusTemporaryRedirect)
 		}
 		return
 	}
+
+	// Check if this is a GET request to a processing path with no image
 	p := imagorpath.Parse(path)
+	if p.Image == "" && !p.Params && app.EnablePostRequests && app.Unsafe {
+		// Show upload form for processing paths when POST requests are enabled
+		renderUploadForm(w, path)
+		return
+	}
 	if p.Params {
 		if !app.DisableParamsEndpoint {
 			writeJSONIndent(w, r, p)
@@ -180,37 +216,30 @@ func (app *Imagor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			w.WriteHeader(499)
-			return
-		}
-		e := WrapError(err)
-		if app.DisableErrorBody {
+		// Check if we should respond with raw image on error
+		if app.ResponseRawOnError && !isBlobEmpty(blob) {
+			e := WrapError(err)
+			app.Logger.Warn("response-raw-on-error",
+				zap.Any("params", p),
+				zap.Error(err),
+				zap.Int("status", e.Code))
+
+			// Write error status code but serve raw image
 			w.WriteHeader(e.Code)
+			app.setResponseHeaders(w, r, blob, p)
+			reader, size, _ := blob.NewReader()
+			writeBody(w, r, reader, size)
 			return
 		}
-		w.WriteHeader(e.Code)
-		writeJSON(w, r, e)
+
+		app.handleErrorResponse(w, r, err)
 		return
 	}
 	if isBlobEmpty(blob) {
 		return
 	}
-	w.Header().Set("Content-Type", blob.ContentType())
-	w.Header().Set("Content-Disposition", getContentDisposition(p, blob))
-	setCacheHeaders(w, r, getTtl(p, app.CacheHeaderTTL), app.CacheHeaderSWR)
-	if r.Header.Get("Imagor-Auto-Format") != "" {
-		w.Header().Add("Vary", "Accept")
-	}
-	if r.Header.Get("Imagor-Raw") != "" {
-		w.Header().Set("Content-Security-Policy", "script-src 'none'")
-	}
-	if h := blob.Header; h != nil {
-		for key := range h {
-			w.Header().Set(key, h.Get(key))
-		}
-	}
-	if checkStatNotModified(w, r, blob.Stat) {
+	app.setResponseHeaders(w, r, blob, p)
+	if blob != nil && checkStatNotModified(w, r, blob.Stat) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
@@ -268,6 +297,7 @@ func (app *Imagor) Do(r *http.Request, p imagorpath.Params) (blob *Blob, err err
 	var hasFormat, hasPreview, isRaw bool
 	var filters = p.Filters
 	p.Filters = nil
+
 	for _, f := range filters {
 		switch f.Name {
 		case "expire":
@@ -296,8 +326,8 @@ func (app *Imagor) Do(r *http.Request, p imagorpath.Params) (blob *Blob, err err
 			p.Filters = append(p.Filters, f)
 		}
 	}
-	// auto WebP / AVIF
-	if !hasFormat && (app.AutoWebP || app.AutoAVIF) {
+	// auto WebP / AVIF / JPEG
+	if !hasFormat && (app.AutoWebP || app.AutoAVIF || app.AutoJPEG) {
 		accept := r.Header.Get("Accept")
 		if app.AutoAVIF && strings.Contains(accept, "image/avif") {
 			p.Filters = append(p.Filters, imagorpath.Filter{
@@ -312,6 +342,13 @@ func (app *Imagor) Do(r *http.Request, p imagorpath.Params) (blob *Blob, err err
 				Args: "webp",
 			})
 			r.Header.Set("Imagor-Auto-Format", "webp") // response Vary: Accept header
+			isPathChanged = true
+		} else if app.AutoJPEG && (accept == "" || strings.Contains(accept, "image/jpeg") || strings.Contains(accept, "image/*") || strings.Contains(accept, "*/*")) {
+			p.Filters = append(p.Filters, imagorpath.Filter{
+				Name: "format",
+				Args: "jpeg",
+			})
+			r.Header.Set("Imagor-Auto-Format", "jpeg") // response Vary: Accept header
 			isPathChanged = true
 		}
 	}
@@ -364,13 +401,33 @@ func (app *Imagor) Do(r *http.Request, p imagorpath.Params) (blob *Blob, err err
 			defer app.sema.Release(1)
 		}
 		var shouldSave bool
-		if blob, shouldSave, err = app.loadStorage(r, p.Image, p.IsBase64); err != nil {
-			if app.Debug {
-				app.Logger.Debug("load", zap.Any("params", p), zap.Error(err))
+		if isColorImage(p.Image) {
+			// color image — skip storage/loader, processor will generate it
+		} else {
+			// Base image cache is opt-in via filters:preview().
+			// Skip cache for requests that depend on original-space coordinates or
+			// per-request decode parameters (crop, focal, page>1, dpi).
+			if hasPreview && !imagorpath.HasCacheBypass(p) {
+				for _, processor := range app.Processors {
+					if c, ok := processor.(Cacher); ok {
+						if cachedBlob, ok := c.LoadFromCache(p.Image, p.Width, p.Height); ok {
+							blob = cachedBlob
+							break
+						}
+					}
+				}
 			}
-			return blob, err
+			if isBlobEmpty(blob) {
+				if blob, shouldSave, err = app.loadStorage(r, p.Image, p.IsBase64); err != nil {
+					if app.Debug {
+						app.Logger.Debug("load", zap.Any("params", p), zap.Error(err))
+					}
+					return blob, err
+				}
+			}
 		}
 
+		sourceBlob := blob
 		var doneSave chan struct{}
 		if shouldSave {
 			doneSave = make(chan struct{})
@@ -379,11 +436,11 @@ func (app *Imagor) Do(r *http.Request, p imagorpath.Params) (blob *Blob, err err
 				storageKey = app.StoragePathStyle.Hash(p.Image)
 			}
 			go func(blob *Blob) {
-				app.save(ctx, app.Storages, storageKey, blob)
+				app.saveWithErrorHandling(ctx, app.Storages, storageKey, blob)
 				close(doneSave)
 			}(blob)
 		}
-		if isBlobEmpty(blob) {
+		if isBlobEmpty(blob) && !isColorImage(p.Image) {
 			return blob, err
 		}
 		if !isRaw {
@@ -433,7 +490,7 @@ func (app *Imagor) Do(r *http.Request, p imagorpath.Params) (blob *Blob, err err
 		ctx = detachContext(ctx)
 		if err == nil && !isBlobEmpty(blob) && resultKey != "" && !isRaw &&
 			len(app.ResultStorages) > 0 {
-			app.save(ctx, app.ResultStorages, resultKey, blob)
+			app.saveWithErrorHandling(ctx, app.ResultStorages, resultKey, blob)
 		}
 		if err != nil && shouldSave {
 			var storageKey = p.Image
@@ -442,8 +499,53 @@ func (app *Imagor) Do(r *http.Request, p imagorpath.Params) (blob *Blob, err err
 			}
 			app.del(ctx, app.Storages, storageKey)
 		}
+
+		// Release fanout resources early when safe to do so
+		// Only release when processing created a new blob (source != result)
+		// Release the SOURCE blob instead of final processed blob
+		if err == nil && !isBlobEmpty(sourceBlob) &&
+			blob != sourceBlob && // Only release if processing created new blob
+			!shouldSave && // Source won't be saved to storage
+			!isRaw {
+			_ = sourceBlob.Release()
+		}
+
 		return blob, err
 	})
+}
+
+// handlePostRequest handles POST upload requests
+func (app *Imagor) handlePostRequest(w http.ResponseWriter, r *http.Request) {
+	// Use imagorpath to parse URL path for processing parameters
+	path := r.URL.EscapedPath()
+	if path == "/" || path == "" {
+		path = "/" // Default path for uploads without processing
+	}
+
+	// Parse imagor parameters from URL path
+	p := imagorpath.Parse(path)
+
+	// Set image to empty string to indicate upload source (no source key)
+	p.Image = ""
+	p.Unsafe = true // POST uploads are always unsafe
+
+	// Process the upload through normal imagor pipeline
+	blob, err := checkBlob(app.Do(r, p))
+	if err != nil {
+		app.handleErrorResponse(w, r, err)
+		return
+	}
+
+	if isBlobEmpty(blob) {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	// Set response headers
+	app.setResponseHeaders(w, r, blob, p)
+
+	reader, size, _ := blob.NewReader()
+	writeBody(w, r, reader, size)
 }
 
 func (app *Imagor) requestWithLoadContext(r *http.Request) *http.Request {
@@ -463,12 +565,60 @@ func (app *Imagor) loadResult(r *http.Request, resultKey, imageKey string) *Blob
 	blob, origin, err := fromStorages(r, app.ResultStorages, resultKey)
 	if err == nil && !isBlobEmpty(blob) {
 		if app.ModifiedTimeCheck && origin != nil && blob.Stat != nil {
-			if sourceStat, err2 := app.storageStat(ctx, imageKey); sourceStat != nil && err2 == nil {
+			var sourceStat *Stat
+			var sourceStatErr error
+
+			// Try loader stat first (if no Storages configured)
+			if len(app.Storages) == 0 {
+				sourceStat, sourceStatErr = app.loaderStat(ctx, imageKey)
+				if app.Debug {
+					if sourceStatErr == nil && sourceStat != nil {
+						app.Logger.Debug("source stat from loader succeeded",
+							zap.String("image_key", imageKey),
+							zap.Time("source_time", sourceStat.ModifiedTime))
+					} else {
+						app.Logger.Debug("source stat from loader failed",
+							zap.String("image_key", imageKey),
+							zap.Error(sourceStatErr))
+					}
+				}
+			}
+
+			// Fallback to storage stat if loader didn't work or Storages is configured
+			if (sourceStat == nil || sourceStatErr != nil) && len(app.Storages) > 0 {
+				sourceStat, sourceStatErr = app.storageStat(ctx, imageKey)
+			}
+
+			if sourceStat != nil && sourceStatErr == nil {
+				if app.Debug {
+					app.Logger.Debug("modified-time-check",
+						zap.Time("result_time", blob.Stat.ModifiedTime),
+						zap.Time("source_time", sourceStat.ModifiedTime),
+						zap.Bool("result_before_source", blob.Stat.ModifiedTime.Before(sourceStat.ModifiedTime)),
+						zap.String("result_key", resultKey),
+						zap.String("image_key", imageKey))
+				}
 				if !blob.Stat.ModifiedTime.Before(sourceStat.ModifiedTime) {
 					return blob
 				}
+			} else {
+				if app.Debug {
+					app.Logger.Debug("modified-time-check-failed-fallback-to-cache",
+						zap.Bool("has_source_stat", sourceStat != nil),
+						zap.Error(sourceStatErr),
+						zap.String("image_key", imageKey))
+				}
+				// If we can't stat the source, use the cached result
+				// This handles cases where source is in loader but not storage
+				return blob
 			}
 		} else {
+			if app.Debug && app.ModifiedTimeCheck {
+				app.Logger.Debug("modified-time-check-skipped",
+					zap.Bool("has_origin", origin != nil),
+					zap.Bool("has_blob_stat", blob.Stat != nil),
+					zap.String("result_key", resultKey))
+			}
 			return blob
 		}
 	}
@@ -551,7 +701,23 @@ func (app *Imagor) fromStoragesAndLoaders(
 	if image == "" && !isBase64 {
 		ref := mustContextRef(r.Context())
 		if ref.Blob == nil {
-			err = ErrNotFound
+			// For POST uploads, try loaders even with empty image key
+			if r.Method == http.MethodPost {
+				for _, loader := range loaders {
+					b, e := checkBlob(loader.Get(r, image))
+					if !isBlobEmpty(b) {
+						blob = b
+						if e == nil {
+							err = nil
+							return
+						}
+					}
+					err = e
+				}
+			}
+			if err == nil && isBlobEmpty(blob) {
+				err = ErrNotFound
+			}
 		} else {
 			blob = ref.Blob
 		}
@@ -599,7 +765,19 @@ func (app *Imagor) storageStat(ctx context.Context, key string) (stat *Stat, err
 	return
 }
 
-func (app *Imagor) save(ctx context.Context, storages []Storage, key string, blob *Blob) {
+func (app *Imagor) loaderStat(ctx context.Context, key string) (stat *Stat, err error) {
+	for _, loader := range app.Loaders {
+		if stater, ok := loader.(Stater); ok {
+			if stat, err = stater.Stat(ctx, key); stat != nil && err == nil {
+				return
+			}
+		}
+	}
+	return
+}
+
+// saveWithErrorHandling saves blob to storage with cleanup on error
+func (app *Imagor) saveWithErrorHandling(ctx context.Context, storages []Storage, key string, blob *Blob) {
 	if key == "" {
 		return
 	}
@@ -615,13 +793,18 @@ func (app *Imagor) save(ctx context.Context, storages []Storage, key string, blo
 			defer wg.Done()
 			if err := storage.Put(ctx, key, blob); err != nil {
 				app.Logger.Warn("save", zap.String("key", key), zap.Error(err))
+				if delErr := storage.Delete(ctx, key); delErr != nil {
+					app.Logger.Warn("delete-after-save-error",
+						zap.String("key", key), zap.Error(delErr))
+				} else if app.Debug {
+					app.Logger.Debug("deleted-after-save-error", zap.String("key", key))
+				}
 			} else if app.Debug {
 				app.Logger.Debug("saved", zap.String("key", key))
 			}
 		}(storage)
 	}
 	wg.Wait()
-	return
 }
 
 func (app *Imagor) del(ctx context.Context, storages []Storage, key string) {
@@ -697,6 +880,44 @@ func (app *Imagor) suppress(
 	}
 }
 
+// setResponseHeaders sets common response headers for blob responses
+func (app *Imagor) setResponseHeaders(w http.ResponseWriter, r *http.Request, blob *Blob, p imagorpath.Params) {
+	if blob == nil {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		return
+	}
+	w.Header().Set("Content-Type", blob.ContentType())
+	w.Header().Set("Content-Disposition", getContentDisposition(p, blob))
+	setCacheHeaders(w, r, getTtl(p, app.CacheHeaderTTL), app.CacheHeaderSWR)
+
+	if r.Header.Get("Imagor-Auto-Format") != "" {
+		w.Header().Add("Vary", "Accept")
+	}
+	if r.Header.Get("Imagor-Raw") != "" {
+		w.Header().Set("Content-Security-Policy", "script-src 'none'")
+	}
+	if h := blob.Header; h != nil {
+		for key := range h {
+			w.Header().Set(key, h.Get(key))
+		}
+	}
+}
+
+// handleErrorResponse handles error responses consistently across endpoints
+func (app *Imagor) handleErrorResponse(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, context.Canceled) {
+		w.WriteHeader(499)
+		return
+	}
+	e := WrapError(err)
+	if app.DisableErrorBody {
+		w.WriteHeader(e.Code)
+		return
+	}
+	w.WriteHeader(e.Code)
+	writeJSON(w, r, e)
+}
+
 func (app *Imagor) debugLog() {
 	if !app.Debug {
 		return
@@ -729,17 +950,6 @@ func (app *Imagor) debugLog() {
 		zap.Strings("processors", processors),
 	)
 }
-
-var landing = fmt.Sprintf(`
-<!doctype html>
-<html>
-	<head><title>imagor v%s</title></head>
-	<body>
-		<h1>imagor v%s</h1>
-		<p><a href="https://github.com/cshum/imagor" target="_blank">https://github.com/cshum/imagor</a></p>
-	</body>
-</html>
-`, Version, Version)
 
 func checkStatNotModified(w http.ResponseWriter, r *http.Request, stat *Stat) bool {
 	if stat == nil || strings.Contains(r.Header.Get("Cache-Control"), "no-cache") {
@@ -863,14 +1073,21 @@ func getContentDisposition(p imagorpath.Params, blob *Blob) string {
 				_, filename = filepath.Split(p.Image)
 			}
 			filename = strings.ReplaceAll(filename, `"`, "%22")
-			if ext := getExtension(blob.BlobType()); ext != "" &&
-				!(ext == ".jpg" && strings.HasSuffix(filename, ".jpeg")) {
-				filename = strings.TrimSuffix(filename, ext) + ext
+			if blob != nil {
+				if ext := getExtension(blob.BlobType()); ext != "" &&
+					!(ext == ".jpg" && strings.HasSuffix(filename, ".jpeg")) {
+					filename = strings.TrimSuffix(filename, ext) + ext
+				}
 			}
 			return fmt.Sprintf(`attachment; filename="%s"`, filename)
 		}
 	}
 	return "inline"
+}
+
+// isColorImage checks if the image path is a color image specification (color:xxx)
+func isColorImage(image string) bool {
+	return strings.HasPrefix(strings.ToLower(image), "color:")
 }
 
 func getType(v interface{}) string {

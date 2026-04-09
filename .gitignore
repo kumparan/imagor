@@ -9,3 +9,4 @@ tmp/
 .env
 bin/imagor
 profile.cov
+docker-compose.yml

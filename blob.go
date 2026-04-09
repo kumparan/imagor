@@ -30,6 +30,7 @@ const (
 	BlobTypePNG
 	BlobTypeGIF
 	BlobTypeWEBP
+	BlobTypeJXL
 	BlobTypeAVIF
 	BlobTypeHEIF
 	BlobTypeTIFF
@@ -37,21 +38,28 @@ const (
 	BlobTypeBMP
 	BlobTypePDF
 	BlobTypeSVG
+	BlobTypeRAF
+	BlobTypeORF
+	BlobTypeRW2
+	BlobTypeX3F
+	BlobTypeCR3
+	BlobTypeCR2
 )
 
 // Blob imagor data blob abstraction
 type Blob struct {
-	newReader     func() (r io.ReadCloser, size int64, err error)
-	newReadSeeker func() (rs io.ReadSeekCloser, size int64, err error)
-	fanout        bool
-	once          sync.Once
-	sniffBuf      []byte
-	err           error
-	size          int64
-	blobType      BlobType
-	filepath      string
-	contentType   string
-	memory        *memory
+	newReader      func() (r io.ReadCloser, size int64, err error)
+	newReadSeeker  func() (rs io.ReadSeekCloser, size int64, err error)
+	fanout         bool
+	fanoutInstance *fanoutreader.Fanout
+	once           sync.Once
+	sniffBuf       []byte
+	err            error
+	size           int64
+	blobType       BlobType
+	filepath       string
+	contentType    string
+	memory         *memory
 
 	Header http.Header
 	Stat   *Stat
@@ -176,6 +184,24 @@ var jpm = []byte{0x6a, 0x70, 0x6D, 0x20}
 var tifII = []byte("\x49\x49\x2A\x00")
 var tifMM = []byte("\x4D\x4D\x00\x2A")
 
+// RAW camera format magic bytes
+var rafHeader = []byte("FUJIFILMCCD-RAW")    // Fuji RAF
+var orfHeaderII = []byte("\x49\x49\x52\x4F") // Olympus ORF (little-endian)
+var orfHeaderMM = []byte("\x4D\x4D\x4F\x52") // Olympus ORF (big-endian)
+var rw2Header = []byte("\x49\x49\x55\x00")   // Panasonic RW2
+var x3fHeader = []byte("\x46\x4F\x56\x62")   // Sigma X3F (FOVb)
+var cr3Brand = []byte("crx ")                // Canon CR3 ftyp brand (ISO BMFF)
+var cr2Magic = []byte("\x43\x52")            // Canon CR2: "CR" at offset 8 (TIFF-based)
+
+// JXL headers
+var jxlHeader = []byte("\xff\x0a")
+var jxlHeaderISOBMFF = []byte("\x00\x00\x00\x0C\x4A\x58\x4C\x20\x0D\x0A\x87\x0A")
+
+const (
+	jxlHeaderLen        = 2
+	jxlHeaderISOBMFFLen = 12
+)
+
 var jsonPrefix = []byte(`{"`)
 var (
 	svgComment       = regexp.MustCompile(`(?s)<!--.*?-->`)
@@ -267,6 +293,7 @@ func (b *Blob) doInit() {
 		// use fan-out reader if buf size known and within memory size
 		// otherwise create new readers
 		fanout := fanoutreader.New(reader, int(size))
+		b.fanoutInstance = fanout
 		b.newReader = func() (io.ReadCloser, int64, error) {
 			return fanout.NewReader(), size, nil
 		}
@@ -309,6 +336,9 @@ func (b *Blob) doInit() {
 			b.blobType = BlobTypePNG
 		} else if bytes.Equal(b.sniffBuf[:3], gifHeader) {
 			b.blobType = BlobTypeGIF
+		} else if bytes.Equal(b.sniffBuf[:jxlHeaderLen], jxlHeader) ||
+			bytes.Equal(b.sniffBuf[:jxlHeaderISOBMFFLen], jxlHeaderISOBMFF) {
+			b.blobType = BlobTypeJXL
 		} else if bytes.Equal(b.sniffBuf[8:12], webpHeader) {
 			b.blobType = BlobTypeWEBP
 		} else if bytes.Equal(b.sniffBuf[4:8], ftyp) && bytes.Equal(b.sniffBuf[8:12], avif) {
@@ -317,6 +347,19 @@ func (b *Blob) doInit() {
 			bytes.Equal(b.sniffBuf[8:12], mif1) ||
 			bytes.Equal(b.sniffBuf[8:12], msf1)) {
 			b.blobType = BlobTypeHEIF
+		} else if len(b.sniffBuf) >= 15 && bytes.Equal(b.sniffBuf[:15], rafHeader) {
+			b.blobType = BlobTypeRAF
+		} else if bytes.Equal(b.sniffBuf[:4], orfHeaderII) || bytes.Equal(b.sniffBuf[:4], orfHeaderMM) {
+			b.blobType = BlobTypeORF
+		} else if bytes.Equal(b.sniffBuf[:4], rw2Header) {
+			b.blobType = BlobTypeRW2
+		} else if bytes.Equal(b.sniffBuf[:4], x3fHeader) {
+			b.blobType = BlobTypeX3F
+		} else if bytes.Equal(b.sniffBuf[4:8], ftyp) && bytes.Equal(b.sniffBuf[8:12], cr3Brand) {
+			b.blobType = BlobTypeCR3
+		} else if (bytes.Equal(b.sniffBuf[:4], tifII) || bytes.Equal(b.sniffBuf[:4], tifMM)) &&
+			len(b.sniffBuf) >= 10 && bytes.Equal(b.sniffBuf[8:10], cr2Magic) {
+			b.blobType = BlobTypeCR2
 		} else if bytes.Equal(b.sniffBuf[:4], tifII) || bytes.Equal(b.sniffBuf[:4], tifMM) {
 			b.blobType = BlobTypeTIFF
 		} else if (bytes.Equal(b.sniffBuf[4:8], []byte{0x6A, 0x50, 0x20, 0x20}) ||
@@ -342,6 +385,8 @@ func (b *Blob) doInit() {
 			b.contentType = "image/gif"
 		case BlobTypeWEBP:
 			b.contentType = "image/webp"
+		case BlobTypeJXL:
+			b.contentType = "image/jxl"
 		case BlobTypeAVIF:
 			b.contentType = "image/avif"
 		case BlobTypeHEIF:
@@ -356,6 +401,18 @@ func (b *Blob) doInit() {
 			b.contentType = "image/bmp"
 		case BlobTypeSVG:
 			b.contentType = "image/svg+xml"
+		case BlobTypeRAF:
+			b.contentType = "image/x-fuji-raf"
+		case BlobTypeORF:
+			b.contentType = "image/x-olympus-orf"
+		case BlobTypeRW2:
+			b.contentType = "image/x-panasonic-rw2"
+		case BlobTypeX3F:
+			b.contentType = "image/x-sigma-x3f"
+		case BlobTypeCR3:
+			b.contentType = "image/x-canon-cr3"
+		case BlobTypeCR2:
+			b.contentType = "image/x-canon-cr2"
 		default:
 			b.contentType = http.DetectContentType(b.sniffBuf)
 		}
@@ -392,6 +449,16 @@ func (b *Blob) IsEmpty() bool {
 func (b *Blob) SupportsAnimation() bool {
 	b.init()
 	return b.blobType == BlobTypeGIF || b.blobType == BlobTypeWEBP
+}
+
+// IsRaw check if blob is a camera RAW image format
+func (b *Blob) IsRaw() bool {
+	b.init()
+	switch b.blobType {
+	case BlobTypeRAF, BlobTypeORF, BlobTypeRW2, BlobTypeX3F, BlobTypeCR3, BlobTypeCR2:
+		return true
+	}
+	return false
 }
 
 // BlobType returns BlobType
@@ -443,6 +510,9 @@ func (b *Blob) ContentType() string {
 // NewReader creates new io.ReadCloser and returns size if known
 func (b *Blob) NewReader() (reader io.ReadCloser, size int64, err error) {
 	b.init()
+	if b.newReader == nil {
+		return nil, 0, b.err
+	}
 	return b.newReader()
 }
 
@@ -510,6 +580,17 @@ func (b *Blob) Err() error {
 	return b.err
 }
 
+// Release stops reading from the source early and releases resources.
+// This is safe to call multiple times and from multiple goroutines.
+// Only works for blobs that use fanoutreader (when fanout is enabled).
+func (b *Blob) Release() error {
+	b.init()
+	if b.fanoutInstance != nil {
+		return b.fanoutInstance.Release()
+	}
+	return nil // No-op for blobs that don't use fanout
+}
+
 func isBlobEmpty(blob *Blob) bool {
 	return blob == nil || blob.IsEmpty()
 }
@@ -531,6 +612,8 @@ func getExtension(typ BlobType) (ext string) {
 		ext = ".gif"
 	case BlobTypeWEBP:
 		ext = ".webp"
+	case BlobTypeJXL:
+		ext = ".jxl"
 	case BlobTypeAVIF:
 		ext = ".avif"
 	case BlobTypeHEIF:
@@ -547,6 +630,18 @@ func getExtension(typ BlobType) (ext string) {
 		ext = ".json"
 	case BlobTypeSVG:
 		ext = ".svg"
+	case BlobTypeRAF:
+		ext = ".raf"
+	case BlobTypeORF:
+		ext = ".orf"
+	case BlobTypeRW2:
+		ext = ".rw2"
+	case BlobTypeX3F:
+		ext = ".x3f"
+	case BlobTypeCR3:
+		ext = ".cr3"
+	case BlobTypeCR2:
+		ext = ".cr2"
 	}
 	return
 }

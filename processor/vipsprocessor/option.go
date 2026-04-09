@@ -1,0 +1,258 @@
+package vipsprocessor
+
+import (
+	"strings"
+	"time"
+
+	"github.com/kumparan/imagor"
+	"go.uber.org/zap"
+)
+
+// Option Processor option
+type Option func(v *Processor)
+
+// WithFilter with filer option of name and FilterFunc pair
+func WithFilter(name string, filter FilterFunc) Option {
+	return func(v *Processor) {
+		v.Filters[name] = filter
+	}
+}
+
+// WithDetector appends a region Detector to the processor.
+// Multiple detectors can be added; their results are merged for smart crop,
+// draw_detections(), and redact() filters.
+func WithDetector(d imagor.Detector) Option {
+	return func(v *Processor) {
+		v.Detectors = append(v.Detectors, d)
+	}
+}
+
+// WithDetectors appends multiple Detectors to the processor at once.
+func WithDetectors(ds ...imagor.Detector) Option {
+	return func(v *Processor) {
+		v.Detectors = append(v.Detectors, ds...)
+	}
+}
+
+// WithDetectorProbeSize sets the maximum dimension (width or height) of the
+// downscaled probe image passed to the Detector for smart crop detection.
+// Keeping the probe small (~400 px) gives roughly a 10x speed-up over
+// full-resolution detection with negligible loss in crop precision. Defaults to 400.
+func WithDetectorProbeSize(size int) Option {
+	return func(v *Processor) {
+		if size > 0 {
+			v.DetectorProbeSize = size
+		}
+	}
+}
+
+// WithDisableBlur with disable blur option
+func WithDisableBlur(disabled bool) Option {
+	return func(v *Processor) {
+		v.DisableBlur = disabled
+	}
+}
+
+// WithDisableFilters with disable filters option
+func WithDisableFilters(filters ...string) Option {
+	return func(v *Processor) {
+		for _, raw := range filters {
+			splits := strings.Split(raw, ",")
+			for _, name := range splits {
+				name = strings.TrimSpace(name)
+				if len(name) > 0 {
+					v.DisableFilters = append(v.DisableFilters, name)
+				}
+			}
+		}
+	}
+}
+
+// WithMozJPEG with MozJPEG option. Require MozJPEG to be installed
+func WithMozJPEG(enabled bool) Option {
+	return func(v *Processor) {
+		v.MozJPEG = enabled
+	}
+}
+
+// WithStripMetadata with strip all metadata from image option
+func WithStripMetadata(enabled bool) Option {
+	return func(v *Processor) {
+		v.StripMetadata = enabled
+	}
+}
+
+// WithAvifSpeed with avif speed option
+func WithAvifSpeed(avifSpeed int) Option {
+	return func(v *Processor) {
+		if avifSpeed >= 0 && avifSpeed <= 9 {
+			v.AvifSpeed = avifSpeed
+		}
+	}
+}
+
+// WithMaxFilterOps with maximum number of filter operations option
+func WithMaxFilterOps(num int) Option {
+	return func(v *Processor) {
+		if num != 0 {
+			v.MaxFilterOps = num
+		}
+	}
+}
+
+// WithMaxAnimationFrames with maximum count of animation frames option
+func WithMaxAnimationFrames(num int) Option {
+	return func(v *Processor) {
+		if num != 0 {
+			v.MaxAnimationFrames = num
+		}
+	}
+}
+
+// WithConcurrency with libvips concurrency option
+func WithConcurrency(num int) Option {
+	return func(v *Processor) {
+		if num != 0 {
+			v.Concurrency = num
+		}
+	}
+}
+
+// WithMaxCacheFiles with libvips max cache files option
+func WithMaxCacheFiles(num int) Option {
+	return func(v *Processor) {
+		if num > 0 {
+			v.MaxCacheFiles = num
+		}
+	}
+}
+
+// WithMaxCacheSize with libvips max cache size option
+func WithMaxCacheSize(num int) Option {
+	return func(v *Processor) {
+		if num > 0 {
+			v.MaxCacheSize = num
+		}
+	}
+}
+
+// WithMaxCacheMem with libvips max cache mem option
+func WithMaxCacheMem(num int) Option {
+	return func(v *Processor) {
+		if num > 0 {
+			v.MaxCacheMem = num
+		}
+	}
+}
+
+// WithLogger with logger option
+func WithLogger(logger *zap.Logger) Option {
+	return func(v *Processor) {
+		if logger != nil {
+			v.Logger = logger
+		}
+	}
+}
+
+// WithDebug with debug option
+func WithDebug(debug bool) Option {
+	return func(v *Processor) {
+		v.Debug = debug
+	}
+}
+
+// WithMaxWidth with maximum width option
+func WithMaxWidth(width int) Option {
+	return func(v *Processor) {
+		if width > 0 {
+			v.MaxWidth = width
+		}
+	}
+}
+
+// WithMaxHeight with maximum height option
+func WithMaxHeight(height int) Option {
+	return func(v *Processor) {
+		if height > 0 {
+			v.MaxHeight = height
+		}
+	}
+}
+
+// WithMaxResolution with maximum resolution option
+func WithMaxResolution(res int) Option {
+	return func(v *Processor) {
+		if res > 0 {
+			v.MaxResolution = res
+		}
+	}
+}
+
+// WithForceBmpFallback force with BMP fallback
+func WithForceBmpFallback() Option {
+	return func(v *Processor) {
+		v.FallbackFunc = v.bmpFallbackFunc
+	}
+}
+
+// WithUnlimited with unlimited option that remove all denial of service limits
+func WithUnlimited(unlimited bool) Option {
+	return func(v *Processor) {
+		v.Unlimited = unlimited
+	}
+}
+
+// WithCacheSize sets the overlay cache memory budget in bytes.
+// Set to 0 (default) to disable the overlay cache.
+// The cache stores decoded raw pixel data (via WriteToMemory) keyed by overlay URL,
+// so one entry serves all requested sizes within CacheMaxWidth/Height.
+func WithCacheSize(size int64) Option {
+	return func(v *Processor) {
+		v.CacheSize = size
+	}
+}
+
+// WithCacheMaxWidth sets the maximum width for cached overlay images.
+// Overlays wider than this are not cached. Defaults to 2400.
+func WithCacheMaxWidth(width int) Option {
+	return func(v *Processor) {
+		if width > 0 {
+			v.CacheMaxWidth = width
+		}
+	}
+}
+
+// WithCacheMaxHeight sets the maximum height for cached images.
+// Images taller than this bypass the cache. Defaults to 2000.
+func WithCacheMaxHeight(height int) Option {
+	return func(v *Processor) {
+		if height > 0 {
+			v.CacheMaxHeight = height
+		}
+	}
+}
+
+// WithCacheFormat sets the storage format for cached image entries.
+// BlobTypeMemory (default, zero value): raw pixels via WriteToMemory — fastest cache-hit,
+// most memory per entry (~68 KB for a 117×150 RGBA image).
+// BlobTypePNG: lossless PNG compression — ~6.6× smaller, pixel-identical quality, slightly slower hit.
+// BlobTypeWEBP: lossy WebP compression — ~17× smaller, slight generation loss vs no-cache, slightly slower hit.
+// Use BlobTypePNG for lossless compression with more cache capacity.
+// Use BlobTypeWEBP for maximum cache density when slight quality difference is acceptable.
+func WithCacheFormat(format imagor.BlobType) Option {
+	return func(v *Processor) {
+		v.CacheFormat = format
+	}
+}
+
+// WithCacheTTL sets the TTL for image cache entries.
+// After the TTL expires, the entry is evicted and the image is re-fetched from source.
+// Set to 0 (default) for no expiry — entries are evicted only by memory pressure (LRU).
+// Use this when source images may change at the same URL (e.g. mutable assets).
+func WithCacheTTL(ttl time.Duration) Option {
+	return func(v *Processor) {
+		if ttl > 0 {
+			v.CacheTTL = ttl
+		}
+	}
+}

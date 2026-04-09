@@ -2,14 +2,15 @@ package filestorage
 
 import (
 	"context"
-	"github.com/kumparan/imagor"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"net/http"
 	"os"
 	"regexp"
 	"testing"
 	"time"
+
+	"github.com/kumparan/imagor"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFileStore_Path(t *testing.T) {
@@ -197,7 +198,7 @@ func TestFileStorage_Load_Save(t *testing.T) {
 	})
 
 	t.Run("expiration", func(t *testing.T) {
-		s := New(dir, WithExpiration(time.Millisecond*10))
+		s := New(dir, WithExpiration(time.Millisecond*100))
 		var err error
 
 		_, err = checkBlob(s.Get(r, "/foo/bar/asdf"))

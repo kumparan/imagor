@@ -1,0 +1,537 @@
+package vipsprocessor
+
+import (
+	"context"
+	"fmt"
+	"math"
+	"runtime"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/kumparan/imagor"
+	"github.com/cshum/vipsgen/vips"
+	"go.uber.org/zap"
+	"golang.org/x/sync/singleflight"
+)
+
+// FilterFunc filter handler function
+type FilterFunc func(ctx context.Context, img *vips.Image, load imagor.LoadFunc, args ...string) (err error)
+
+// FilterMap filter handler map
+type FilterMap map[string]FilterFunc
+
+var processorLock sync.RWMutex
+var processorCount int
+
+// Processor implements imagor.Processor interface
+type Processor struct {
+	Filters            FilterMap
+	FallbackFunc       FallbackFunc
+	Detectors          []imagor.Detector
+	DetectorProbeSize  int
+	DisableBlur        bool
+	DisableFilters     []string
+	MaxFilterOps       int
+	Logger             *zap.Logger
+	Concurrency        int
+	MaxCacheFiles      int
+	MaxCacheMem        int
+	MaxCacheSize       int
+	MaxWidth           int
+	MaxHeight          int
+	MaxResolution      int
+	MaxAnimationFrames int
+	MozJPEG            bool
+	StripMetadata      bool
+	AvifSpeed          int
+	Unlimited          bool
+	Debug              bool
+
+	// Image cache settings
+	CacheSize      int64
+	CacheMaxWidth  int
+	CacheMaxHeight int
+	CacheTTL       time.Duration
+	CacheFormat    imagor.BlobType // BlobTypeMemory (default, raw pixels), BlobTypeWEBP, BlobTypePNG
+
+	disableFilters map[string]bool
+	cache          *imageCache
+	cacheSF        singleflight.Group
+	hasDcrawload   bool
+}
+
+// NewProcessor create Processor
+func NewProcessor(options ...Option) *Processor {
+	v := &Processor{
+		MaxWidth:           9999,
+		MaxHeight:          9999,
+		MaxResolution:      81000000,
+		Concurrency:        1,
+		MaxFilterOps:       -1,
+		MaxAnimationFrames: -1,
+		Logger:             zap.NewNop(),
+		disableFilters:     map[string]bool{},
+		CacheMaxWidth:      2400,
+		CacheMaxHeight:     2000,
+		DetectorProbeSize:  400,
+	}
+	v.Filters = FilterMap{
+		"image":            v.image,
+		"watermark":        v.watermark,
+		"round_corner":     roundCorner,
+		"rotate":           rotate,
+		"label":            label,
+		"text":             text,
+		"grayscale":        grayscale,
+		"brightness":       brightness,
+		"background_color": backgroundColor,
+		"contrast":         contrast,
+		"modulate":         modulate,
+		"hue":              hue,
+		"saturation":       saturation,
+		"rgb":              rgb,
+		"blur":             blur,
+		"sharpen":          sharpen,
+		"strip_icc":        stripIcc,
+		"strip_exif":       stripExif,
+		"to_colorspace":    toColorspace,
+		"trim":             trim,
+		"padding":          v.padding,
+		"proportion":       proportion,
+		"crop":             crop,
+		"draw_detections":  v.drawDetectionsFilter,
+		"pixelate":         pixelate,
+		"redact":           v.redactFilter,
+		"redact_oval":      v.redactOvalFilter,
+	}
+	for _, option := range options {
+		option(v)
+	}
+	if v.DisableBlur {
+		v.DisableFilters = append(v.DisableFilters, "blur", "sharpen")
+	}
+	for _, name := range v.DisableFilters {
+		v.disableFilters[name] = true
+	}
+	if v.Concurrency == -1 {
+		v.Concurrency = runtime.NumCPU()
+	}
+	return v
+}
+
+// Startup implements imagor.Processor interface
+func (v *Processor) Startup(ctx context.Context) error {
+	processorLock.Lock()
+	defer processorLock.Unlock()
+	processorCount++
+	if processorCount <= 1 {
+		if v.Debug {
+			vips.SetLogging(func(domain string, level vips.LogLevel, msg string) {
+				switch level {
+				case vips.LogLevelDebug:
+					v.Logger.Debug(domain, zap.String("log", msg))
+				case vips.LogLevelMessage, vips.LogLevelInfo:
+					v.Logger.Info(domain, zap.String("log", msg))
+				case vips.LogLevelWarning, vips.LogLevelCritical, vips.LogLevelError:
+					v.Logger.Warn(domain, zap.String("log", msg))
+				}
+			}, vips.LogLevelDebug)
+		} else {
+			vips.SetLogging(func(domain string, level vips.LogLevel, msg string) {
+				v.Logger.Warn(domain, zap.String("log", msg))
+			}, vips.LogLevelError)
+		}
+		vips.Startup(&vips.Config{
+			MaxCacheFiles:    v.MaxCacheFiles,
+			MaxCacheMem:      v.MaxCacheMem,
+			MaxCacheSize:     v.MaxCacheSize,
+			ConcurrencyLevel: v.Concurrency,
+		})
+	}
+	v.hasDcrawload = vips.HasOperation("dcrawload_source")
+	if v.hasDcrawload {
+		v.Logger.Debug("dcrawload support enabled")
+	}
+	if v.FallbackFunc == nil {
+		if vips.HasOperation("magickload_buffer") {
+			v.FallbackFunc = bufferFallbackFunc
+			v.Logger.Debug("source fallback", zap.String("fallback", "magickload_buffer"))
+		} else {
+			v.FallbackFunc = v.bmpFallbackFunc
+			v.Logger.Debug("source fallback", zap.String("fallback", "bmp"))
+		}
+	}
+	if v.CacheSize > 0 && v.cache == nil {
+		cache, err := newImageCache(v.CacheSize)
+		if err != nil {
+			return err
+		}
+		v.cache = cache
+	}
+	for _, d := range v.Detectors {
+		if err := d.Startup(ctx); err != nil {
+			return fmt.Errorf("detector startup: %w", err)
+		}
+	}
+	return nil
+}
+
+// AddDetector implements imagor.DetectorAdder.
+func (v *Processor) AddDetector(d imagor.Detector) {
+	v.Detectors = append(v.Detectors, d)
+}
+
+// Shutdown implements imagor.Processor interface
+func (v *Processor) Shutdown(ctx context.Context) error {
+	processorLock.Lock()
+	defer processorLock.Unlock()
+	if processorCount <= 0 {
+		return nil
+	}
+	processorCount--
+	if processorCount == 0 {
+		vips.Shutdown()
+	}
+	if v.cache != nil {
+		v.cache.Close()
+		v.cache = nil
+	}
+	for _, d := range v.Detectors {
+		_ = d.Shutdown(ctx)
+	}
+	return nil
+}
+
+func (v *Processor) newImageFromBlob(
+	ctx context.Context, blob *imagor.Blob, options *vips.LoadOptions,
+) (*vips.Image, error) {
+	if blob == nil || blob.IsEmpty() {
+		return nil, imagor.ErrNotFound
+	}
+	if blob.BlobType() == imagor.BlobTypeMemory {
+		buf, width, height, bands, _ := blob.Memory()
+		img, err := vips.NewImageFromMemory(buf, width, height, bands)
+		if err != nil {
+			return nil, err
+		}
+		// NewImageFromMemory assigns VIPS_INTERPRETATION_MULTIBAND by default.
+		// Cached raw-pixel blobs were normalized to sRGB on write, so restore
+		if bands >= 3 {
+			if copied, copyErr := img.Copy(&vips.CopyOptions{
+				Interpretation: vips.InterpretationSrgb,
+			}); copyErr == nil {
+				img.Close()
+				return copied, nil
+			}
+		}
+		return img, nil
+	}
+	// Camera RAW files (RAF, ORF, RW2, X3F, CR3) must use dcrawload explicitly.
+	// CR2 is excluded: it is TIFF-based and crashes dcrawload_source, so it falls
+	// through to the normal TIFF loader below.
+	if blob.IsRaw() && blob.BlobType() != imagor.BlobTypeCR2 {
+		if !v.hasDcrawload {
+			return nil, imagor.ErrUnsupportedFormat
+		}
+		return v.dcrawloadFromBlob(ctx, blob)
+	}
+	// For TIFF blobs (ARW, NEF, DNG, PEF, SRW, NRW, CR2, regular TIFF), try dcrawload
+	// first when available — it handles TIFF-based RAW formats that share TIFF magic bytes.
+	// CR2 is now BlobTypeCR2 (not BlobTypeTIFF) so it won't hit this branch.
+	// LibRaw rejects non-RAW TIFFs quickly (header check only).
+	if blob.BlobType() == imagor.BlobTypeTIFF && v.hasDcrawload {
+		img, err := v.dcrawloadFromBlob(ctx, blob)
+		if err == nil {
+			return img, nil
+		}
+		// dcrawload failed — it's a real TIFF or unsupported, proceed with normal loading
+	}
+	reader, _, err := blob.NewReader()
+	if err != nil {
+		return nil, err
+	}
+	src := vips.NewSource(reader)
+	contextDefer(ctx, src.Close)
+	img, err := vips.NewImageFromSource(src, options)
+	if err != nil && v.FallbackFunc != nil {
+		src.Close()
+		return v.FallbackFunc(blob, options)
+	}
+	return img, err
+}
+
+// dcrawloadFromBlob loads a RAW camera image using vips_dcrawload_source.
+func (v *Processor) dcrawloadFromBlob(ctx context.Context, blob *imagor.Blob) (*vips.Image, error) {
+	reader, _, err := blob.NewReader()
+	if err != nil {
+		return nil, err
+	}
+	src := vips.NewSource(reader)
+	contextDefer(ctx, src.Close)
+	img, err := vips.NewDcrawloadSource(src, vips.DefaultDcrawloadSourceOptions())
+	if err != nil {
+		src.Close()
+		return nil, err
+	}
+	return img, nil
+}
+
+func newThumbnailFromBlob(
+	ctx context.Context, blob *imagor.Blob,
+	width, height int, crop vips.Interesting, size vips.Size, options *vips.LoadOptions,
+) (*vips.Image, error) {
+	if blob == nil || blob.IsEmpty() {
+		return nil, imagor.ErrNotFound
+	}
+	reader, _, err := blob.NewReader()
+	if err != nil {
+		return nil, err
+	}
+	src := vips.NewSource(reader)
+	contextDefer(ctx, src.Close)
+	var optionString string
+	if options != nil {
+		optionString = options.OptionString()
+	}
+	return vips.NewThumbnailSource(src, width, &vips.ThumbnailSourceOptions{
+		Height:       height,
+		Crop:         crop,
+		Size:         size,
+		OptionString: optionString,
+	})
+}
+
+// unlimitedSupportedByLoader returns true only for blob types whose libvips
+// loader accepts the "unlimited" option. gifload, webpload, jp2kload, jxlload,
+// pdfload and bmpload do not have this property and will error if passed it.
+func unlimitedSupportedByLoader(blob *imagor.Blob) bool {
+	switch blob.BlobType() {
+	case imagor.BlobTypeJPEG, imagor.BlobTypePNG,
+		imagor.BlobTypeTIFF, imagor.BlobTypeCR2,
+		imagor.BlobTypeAVIF, imagor.BlobTypeHEIF,
+		imagor.BlobTypeSVG:
+		return true
+	}
+	return false
+}
+
+// NewThumbnail creates new thumbnail with resize and crop from imagor.Blob
+func (v *Processor) NewThumbnail(
+	ctx context.Context, blob *imagor.Blob, width, height int, crop vips.Interesting,
+	size vips.Size, n, page int, dpi int,
+) (*vips.Image, error) {
+	var options = &vips.LoadOptions{}
+	if dpi > 0 {
+		options.Dpi = dpi
+	}
+	options.Unlimited = v.Unlimited && unlimitedSupportedByLoader(blob)
+	var err error
+	var img *vips.Image
+	if isMultiPage(blob, n, page) {
+		applyMultiPageOptions(options, n, page)
+		if crop == vips.InterestingNone || size == vips.SizeForce {
+			if img, err = v.newImageFromBlob(ctx, blob, options); err != nil {
+				return nil, WrapErr(err)
+			}
+			if n > 1 || page > 1 {
+				// reload image to restrict frames loaded
+				n, page = recalculateImage(img, n, page)
+				return v.NewThumbnail(ctx, blob, width, height, crop, size, -n, -page, dpi)
+			}
+			if _, err = v.CheckResolution(img, nil); err != nil {
+				return nil, err
+			}
+			if err = img.ThumbnailImage(width, &vips.ThumbnailImageOptions{
+				Height: height, Size: size, Crop: crop,
+			}); err != nil {
+				img.Close()
+				return nil, WrapErr(err)
+			}
+		} else {
+			if img, err = v.CheckResolution(v.newImageFromBlob(ctx, blob, options)); err != nil {
+				return nil, WrapErr(err)
+			}
+			if n > 1 || page > 1 {
+				// reload image to restrict frames loaded
+				n, page = recalculateImage(img, n, page)
+				return v.NewThumbnail(ctx, blob, width, height, crop, size, -n, -page, dpi)
+			}
+			if err = v.animatedThumbnailWithCrop(img, width, height, crop, size); err != nil {
+				img.Close()
+				return nil, WrapErr(err)
+			}
+		}
+	} else {
+		switch blob.BlobType() {
+		case imagor.BlobTypeJPEG, imagor.BlobTypeGIF, imagor.BlobTypeWEBP:
+			// only allow real thumbnail for jpeg gif webp
+			img, err = newThumbnailFromBlob(ctx, blob, width, height, crop, size, options)
+		default:
+			img, err = v.newThumbnailFallback(ctx, blob, width, height, crop, size, options)
+		}
+	}
+	return v.CheckResolution(img, WrapErr(err))
+}
+
+func (v *Processor) newThumbnailFallback(
+	ctx context.Context, blob *imagor.Blob, width, height int, crop vips.Interesting, size vips.Size, options *vips.LoadOptions,
+) (img *vips.Image, err error) {
+	if img, err = v.CheckResolution(v.newImageFromBlob(ctx, blob, options)); err != nil {
+		return
+	}
+	if err = img.ThumbnailImage(width, &vips.ThumbnailImageOptions{
+		Height: height, Size: size, Crop: crop,
+	}); err != nil {
+		img.Close()
+		return
+	}
+	return img, WrapErr(err)
+}
+
+// NewImage creates new Image from imagor.Blob
+func (v *Processor) NewImage(ctx context.Context, blob *imagor.Blob, n, page int, dpi int) (*vips.Image, error) {
+	var options = &vips.LoadOptions{}
+	if dpi > 0 {
+		options.Dpi = dpi
+	}
+	options.Unlimited = v.Unlimited && unlimitedSupportedByLoader(blob)
+	if isMultiPage(blob, n, page) {
+		applyMultiPageOptions(options, n, page)
+		img, err := v.CheckResolution(v.newImageFromBlob(ctx, blob, options))
+		if err != nil {
+			return nil, WrapErr(err)
+		}
+		// reload image to restrict frames loaded
+		if n > 1 || page > 1 {
+			n, page = recalculateImage(img, n, page)
+			return v.NewImage(ctx, blob, -n, -page, dpi)
+		}
+		return img, nil
+	}
+	img, err := v.CheckResolution(v.newImageFromBlob(ctx, blob, options))
+	if err != nil {
+		return nil, WrapErr(err)
+	}
+	return img, nil
+}
+
+// Thumbnail handles thumbnail operation
+func (v *Processor) Thumbnail(
+	img *vips.Image, width, height int, crop vips.Interesting, size vips.Size,
+) error {
+	if crop == vips.InterestingNone || size == vips.SizeForce || img.Height() == img.PageHeight() {
+		return img.ThumbnailImage(width, &vips.ThumbnailImageOptions{
+			Height: height, Size: size, Crop: crop,
+		})
+	}
+	return v.animatedThumbnailWithCrop(img, width, height, crop, size)
+}
+
+// FocalThumbnail handles thumbnail with custom focal point
+func (v *Processor) FocalThumbnail(img *vips.Image, w, h int, imgAspect, fx, fy float64) (err error) {
+	if float64(w)/float64(h) > imgAspect {
+		if err = img.ThumbnailImage(w, &vips.ThumbnailImageOptions{
+			Height: v.MaxHeight, Crop: vips.InterestingNone,
+		}); err != nil {
+			return
+		}
+	} else {
+		if err = img.ThumbnailImage(v.MaxWidth, &vips.ThumbnailImageOptions{
+			Height: h, Crop: vips.InterestingNone,
+		}); err != nil {
+			return
+		}
+	}
+	var top, left float64
+	left = float64(img.Width())*fx - float64(w)/2
+	top = float64(img.PageHeight())*fy - float64(h)/2
+	left = math.Max(0, math.Min(left, float64(img.Width()-w)))
+	top = math.Max(0, math.Min(top, float64(img.PageHeight()-h)))
+	return img.ExtractAreaMultiPage(int(left), int(top), w, h)
+}
+
+func (v *Processor) animatedThumbnailWithCrop(
+	img *vips.Image, w, h int, crop vips.Interesting, size vips.Size,
+) (err error) {
+	if size == vips.SizeDown && img.Width() < w && img.PageHeight() < h {
+		return
+	}
+	var top, left int
+	if float64(w)/float64(h) > float64(img.Width())/float64(img.PageHeight()) {
+		if err = img.ThumbnailImage(w, &vips.ThumbnailImageOptions{
+			Height: v.MaxHeight, Crop: vips.InterestingNone, Size: size,
+		}); err != nil {
+			return
+		}
+	} else {
+		if err = img.ThumbnailImage(v.MaxWidth, &vips.ThumbnailImageOptions{
+			Height: h, Crop: vips.InterestingNone, Size: size,
+		}); err != nil {
+			return
+		}
+	}
+	if crop == vips.InterestingHigh {
+		left = img.Width() - w
+		top = img.PageHeight() - h
+	} else if crop == vips.InterestingCentre || crop == vips.InterestingAttention {
+		left = (img.Width() - w) / 2
+		top = (img.PageHeight() - h) / 2
+	}
+	return img.ExtractAreaMultiPage(left, top, w, h)
+}
+
+// CheckResolution check image resolution for image bomb prevention
+func (v *Processor) CheckResolution(img *vips.Image, err error) (*vips.Image, error) {
+	if err != nil || img == nil {
+		return img, err
+	}
+	if !v.Unlimited && (img.Width() > v.MaxWidth || img.PageHeight() > v.MaxHeight ||
+		(img.Width()*img.Height()) > v.MaxResolution) {
+		img.Close()
+		return nil, imagor.ErrMaxResolutionExceeded
+	}
+	return img, nil
+}
+
+func isMultiPage(blob *imagor.Blob, n, page int) bool {
+	return blob != nil && (blob.SupportsAnimation() || blob.BlobType() == imagor.BlobTypePDF) && ((n != 1 && n != 0) || (page != 1 && page != 0))
+}
+
+func applyMultiPageOptions(params *vips.LoadOptions, n, page int) {
+	if page < -1 {
+		params.Page = -page - 1
+	} else if n < -1 {
+		params.N = -n
+	} else {
+		params.N = -1
+	}
+}
+
+func recalculateImage(img *vips.Image, n, page int) (int, int) {
+	// reload image to restrict frames loaded
+	numPages := img.Pages()
+	img.Close()
+	if page > 1 && page > numPages {
+		page = numPages
+	} else if n > 1 && n > numPages {
+		n = numPages
+	}
+	return n, page
+}
+
+// WrapErr wraps error to become imagor.Error
+func WrapErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	if e, ok := err.(imagor.Error); ok {
+		return e
+	}
+	msg := strings.TrimSpace(err.Error())
+	if strings.HasPrefix(msg, "VipsForeignLoad:") &&
+		strings.HasSuffix(msg, "is not in a known format") {
+		return imagor.ErrUnsupportedFormat
+	}
+	return imagor.NewError(msg, 406)
+}
