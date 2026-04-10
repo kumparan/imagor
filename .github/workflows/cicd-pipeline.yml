@@ -124,12 +124,16 @@ jobs:
 
       - name: Build Docker image
         if: needs.prepare.outputs.should_deploy == 'true'
-        env:
-          IMAGE_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_DEFAULT_REGION }}.amazonaws.com/${{ env.SERVICE_NAME }}:${{ env.BUILD_TAG }}
         run: |
-          echo "Building Docker image: ${{ env.IMAGE_REGISTRY }}"
-          docker buildx build --push -t ${{ env.IMAGE_REGISTRY }} .
-          # docker push ${{ env.IMAGE_REGISTRY }}
+          BUILD_TAG="${{ needs.prepare.outputs.build_tag }}"
+          SERVICE_NAME="${{ needs.prepare.outputs.service_name }}"
+          AWS_ACCOUNT_ID="${{ secrets.AWS_ACCOUNT_ID }}"
+          AWS_REGION="${{ secrets.AWS_DEFAULT_REGION }}"
+          
+          IMAGE_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${SERVICE_NAME}:${BUILD_TAG}"
+          
+          echo "Building Docker image: ${IMAGE_REGISTRY}"
+          docker build --push -t "${IMAGE_REGISTRY}" .
 
   # # Job 3: Update Vault - store secrets and configuration
   # update-vault:
