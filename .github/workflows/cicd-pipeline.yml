@@ -1,0 +1,216 @@
+name: cicd-pipeline
+
+# CI/CD Pipeline for GitHub Actions
+# Triggers: merge to master, tag push (staging-*, sre-*), manual trigger
+# Runs on self-hosted runner with jobs: prepare, build, update vault, deploy
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - master
+  push:
+    tags:
+      - 'staging-*'
+      - 'sre-*'
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: 'Version tag (optional, for manual versioning)'
+        required: false
+        type: string
+
+env:
+  PROJECT: "BACKEND"
+  DEPLOYER: ${{ github.actor }}
+  IMAGE_TAG: ${{ github.ref_name }}
+  ENV: "staging"
+  # AWS_CONFIG_DIR: "$CI_PROJECT_DIR/.aws"
+
+  ### Notification Channel Slack
+  CHANNEL_SLACK_STAGING: "#deployment-v4"
+  CHANNEL_SLACK_PRODUCTION: "#be-deployment-production"
+  APP_VERSION: ${{ github.ref_name }}
+  USER_DEPLOY: ${{ github.actor }}
+
+jobs:
+  # Job 1: Preparation stage - setup environment, validate configs
+  prepare:
+    name: Preparing Deployment ${{ github.repository }} - ${{ github.ref_name }}
+    runs-on: [self-hosted]
+    outputs:
+      build_tag: ${{ steps.tag.outputs.build_tag }}
+      should_deploy: ${{ steps.check.outputs.should_deploy }}
+      service_name: ${{ steps.service.outputs.service_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract service name from repository
+        id: service
+        run: |
+          SERVICE_NAME="${{ github.repository }}"
+          SERVICE_NAME="${SERVICE_NAME##*/}"
+          SERVICE_NAME="${SERVICE_NAME}-service"
+          echo "service_name=${SERVICE_NAME}" >> $GITHUB_OUTPUT
+          echo "Service name: ${SERVICE_NAME}"
+
+      - name: Determine build tag
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.version_tag }}" ]]; then
+            BUILD_TAG="${{ github.event.inputs.version_tag }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            BUILD_TAG="$(echo "${{ github.ref }}" | sed 's|refs/tags/||')"
+          else
+            BUILD_TAG="${{ github.sha }}"
+          fi
+          echo "build_tag=${B
+          UILD_TAG}" >> $GITHUB_OUTPUT
+          echo "Build tag: ${BUILD_TAG}"
+
+      - name: Check deployment conditions
+        id: check
+        run: |
+          DEPLOY=false
+          
+          # Deploy on PR merge to master
+          if [[ "${{ github.event_name }}" == "pull_request" && "${{ github.event.pull_request.merged }}" == "true" && "${{ github.base_ref }}" == "master" ]]; then
+            DEPLOY=true
+            echo "Deployment triggered: PR merged to master"
+          fi
+          
+          # Deploy on staging-* or sre-* tags
+          if [[ "${{ github.ref }}" == refs/tags/staging-* || "${{ github.ref }}" == refs/tags/sre-* ]]; then
+            DEPLOY=true
+            echo "Deployment triggered: Tag push (staging-* or sre-*)"
+          fi
+          
+          # Manual trigger
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            DEPLOY=true
+            echo "Deployment triggered: Manual workflow_dispatch"
+          fi
+          
+          echo "should_deploy=${DEPLOY}" >> $GITHUB_OUTPUT
+
+      - name: Validate environment
+        run: |
+          echo "Validation: Checking environment setup..."
+          env | sort
+
+  # Job 2: Build stage - compile, test, build artifacts
+  build:
+    name: Build
+    runs-on: [self-hosted]
+    needs: [prepare]
+    env:
+      SERVICE_NAME: ${{ needs.prepare.outputs.service_name }}
+      BUILD_TAG: ${{ needs.prepare.outputs.build_tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build Docker image
+        if: needs.prepare.outputs.should_deploy == 'true'
+        env:
+          IMAGE_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_DEFAULT_REGION }}.amazonaws.com/${{ env.SERVICE_NAME }}:${{ env.BUILD_TAG }}
+        run: |
+          echo "Building Docker image: ${{ env.IMAGE_REGISTRY }}"
+          docker buildx build --push -t ${{ env.IMAGE_REGISTRY }} .
+          # docker push ${{ env.IMAGE_REGISTRY }}
+
+  # # Job 3: Update Vault - store secrets and configuration
+  # update-vault:
+  #   name: Update Vault
+  #   runs-on: [self-hosted]
+  #   needs: [prepare, build]
+  #   if: needs.prepare.outputs.should_deploy == 'true'
+  #   env:
+  #     SERVICE_NAME: ${{ needs.prepare.outputs.service_name }}
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
+
+  #     - name: Authenticate to Vault
+  #       run: |
+  #         echo "Authenticating to Vault..."
+  #         # Add Vault authentication steps
+  #         # Example: vault login -method=github token=${{ secrets.GITHUB_TOKEN }}
+
+  #     - name: Update Vault secrets
+  #       run: |
+  #         echo "Updating Vault with build tag: ${{ needs.prepare.outputs.build_tag }}"
+  #         echo "Service: ${{ env.SERVICE_NAME }}"
+  #         # Add Vault update commands here
+  #         # Examples:
+  #         # - vault kv put secret/${{ env.SERVICE_NAME }}/config version=${{ needs.prepare.outputs.build_tag }}
+  #         # - vault kv put secret/${{ env.SERVICE_NAME }}/build-info timestamp=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+
+  #     - name: Verify Vault updates
+  #       run: |
+  #         echo "Verifying Vault updates..."
+  #         # vault kv get secret/${{ env.SERVICE_NAME }}/config
+
+  # # Job 4: Deploy stage - deploy to environments
+  # deploy:
+  #   name: Deploy
+  #   runs-on: [self-hosted]
+  #   needs: [prepare, build, update-vault]
+  #   if: needs.prepare.outputs.should_deploy == 'true'
+  #   env:
+  #     SERVICE_NAME: ${{ needs.prepare.outputs.service_name }}
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
+
+  #     - name: Configure deployment environment
+  #       run: |
+  #         echo "Configuring deployment environment..."
+  #         echo "Service: ${{ env.SERVICE_NAME }}"
+  #         echo "Build tag: ${{ needs.prepare.outputs.build_tag }}"
+  #         # Add environment configuration commands
+
+  #     - name: Deploy to target environment
+  #       run: |
+  #         echo "Deploying application..."
+  #         # Add your deployment commands here
+  #         # Examples for Kubernetes:
+  #         # - kubectl set image deployment/${{ env.SERVICE_NAME }} ${{ env.SERVICE_NAME }}=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_DEFAULT_REGION }}.amazonaws.com/${{ github.repository }}:${{ needs.prepare.outputs.build_tag }} -n default
+  #         # 
+  #         # Examples for Helm:
+  #         # - helm upgrade --install ${{ env.SERVICE_NAME }} ./helm-chart --set image.tag=${{ needs.prepare.outputs.build_tag }}
+  #         #
+  #         # Examples for traditional deployment:
+  #         # - ansible-playbook deploy.yml -e "service_name=${{ env.SERVICE_NAME }} build_tag=${{ needs.prepare.outputs.build_tag }}"
+
+  #     - name: Verify deployment
+  #       run: |
+  #         echo "Verifying deployment..."
+  #         # Add health checks and verification commands
+  #         # Examples:
+  #         # - kubectl rollout status deployment/${{ env.SERVICE_NAME }} -n default
+  #         # - curl -f http://localhost/health || exit 1
+
+  #     - name: Notify deployment status
+  #       if: always()
+  #       run: |
+  #         STATUS=${{ job.status }}
+  #         REPO="${{ github.repository }}"
+  #         BRANCH="${{ github.ref_name }}"
+  #         SERVICE="${{ env.SERVICE_NAME }}"
+  #         BUILD_TAG="${{ needs.prepare.outputs.build_tag }}"
+  #         echo "Deployment ${STATUS} - Service: ${SERVICE}, Branch: ${BRANCH}, Build: ${BUILD_TAG}"
+  #         # Add notification commands (Slack, email, etc.)
+    
