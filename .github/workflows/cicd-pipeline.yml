@@ -65,8 +65,7 @@ jobs:
           else
             BUILD_TAG="${{ github.sha }}"
           fi
-          echo "build_tag=${B
-          UILD_TAG}" >> $GITHUB_OUTPUT
+          echo "build_tag=${BUILD_TAG}" >> $GITHUB_OUTPUT
           echo "Build tag: ${BUILD_TAG}"
 
       - name: Check deployment conditions
