@@ -12,7 +12,6 @@ on:
   #     - master
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
       - 'production-*'
       - 'staging-*'
       - 'sre-*'
