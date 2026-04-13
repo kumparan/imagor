@@ -448,6 +448,163 @@ jobs:
                 \"user_email\":\"sre@kumparan.com\"
             }" || true
           echo "Deployment history logged"
+
+  # Job 5: Notification on success
+  notif_success:
+    name: Notify Success
+    runs-on: [self-hosted]
+    needs: [prepare, deploy]
+    if: success()
+    steps:
+      - name: Determine email for Slack
+        id: email
+        run: |
+          if [[ "${{ needs.prepare.outputs.environment }}" == "production" && "${{ github.ref_name }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            EMAIL="${{ github.actor }}"
+          elif [[ "${{ github.ref_name }}" =~ production ]]; then
+            EMAIL="${{ github.actor }}"
+          else
+            EMAIL="${{ github.actor }}"
+          fi
+          echo "email=${EMAIL}" >> $GITHUB_OUTPUT
+
+      - name: Get Slack user ID
+        id: slack-user
+        run: |
+          SLACK_USER_ID=$(curl -s \
+            -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
+            "https://slack.com/api/users.lookupByEmail?email=${{ steps.email.outputs.email }}" \
+            | jq -r '.user.id // "unknown"')
+          echo "slack_user_id=${SLACK_USER_ID}" >> $GITHUB_OUTPUT
+          echo "Slack User ID: ${SLACK_USER_ID}"
+
+      - name: Prepare notification channel
+        id: channel
+        run: |
+          if [[ "${{ needs.prepare.outputs.environment }}" == "production" ]]; then
+            CHANNEL="${{ env.CHANNEL_SLACK_PRODUCTION }}"
+          else
+            CHANNEL="${{ env.CHANNEL_SLACK_STAGING }}"
+          fi
+          echo "channel=${CHANNEL}" >> $GITHUB_OUTPUT
+          echo "Notification Channel: ${CHANNEL}"
+
+      - name: Send Slack notification - Success
+        run: |
+          SLACK_USER_ID="${{ steps.slack-user.outputs.slack_user_id }}"
+          CHANNEL="${{ steps.channel.outputs.channel }}"
+          
+          curl -X POST -H 'Content-type: application/json' --data "{
+            \"channel\": \"${CHANNEL}\",
+            \"attachments\": [
+              {
+                \"mrkdwn_in\": [\"text\"],
+                \"color\": \"#36a64f\",
+                \"title\": \":white_check_mark: DEPLOYMENT SUCCEEDED: | ${{ env.PROJECT }} | ${{ needs.prepare.outputs.environment }}\",
+                \"fields\": [
+                  {\"title\": \"Service Name\", \"value\": \"${{ needs.prepare.outputs.service_name }}\", \"short\": true},
+                  {\"title\": \"Build Tag\", \"value\": \"${{ needs.prepare.outputs.build_tag }}\", \"short\": true},
+                  {\"title\": \"Environment\", \"value\": \"${{ needs.prepare.outputs.environment }}\", \"short\": true},
+                  {\"title\": \"Trigger\", \"value\": \"${{ github.event_name }}\", \"short\": true},
+                  {\"title\": \"Deployed by\", \"value\": \"<@${SLACK_USER_ID}> | <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Workflow Details>\", \"short\": false}
+                ]
+              }
+            ]
+          }" ${{ secrets.SLACK_WEBHOOK_URL }}
+        continue-on-error: true
+
+  # Job 6: Notification on failure
+  notif_failure:
+    name: Notify Failure
+    runs-on: [self-hosted]
+    needs: [prepare, deploy]
+    if: failure()
+    steps:
+      - name: Determine email for Slack
+        id: email
+        run: |
+          if [[ "${{ needs.prepare.outputs.environment }}" == "production" && "${{ github.ref_name }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            EMAIL="${{ github.actor }}"
+          elif [[ "${{ github.ref_name }}" =~ production ]]; then
+            EMAIL="${{ github.actor }}"
+          else
+            EMAIL="${{ github.actor }}"
+          fi
+          echo "email=${EMAIL}" >> $GITHUB_OUTPUT
+
+      - name: Get Slack user ID
+        id: slack-user
+        run: |
+          SLACK_USER_ID=$(curl -s \
+            -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
+            "https://slack.com/api/users.lookupByEmail?email=${{ steps.email.outputs.email }}" \
+            | jq -r '.user.id // "unknown"')
+          echo "slack_user_id=${SLACK_USER_ID}" >> $GITHUB_OUTPUT
+          echo "Slack User ID: ${SLACK_USER_ID}"
+
+      - name: Prepare notification channel
+        id: channel
+        run: |
+          if [[ "${{ needs.prepare.outputs.environment }}" == "production" ]]; then
+            CHANNEL="${{ env.CHANNEL_SLACK_PRODUCTION }}"
+          else
+            CHANNEL="${{ env.CHANNEL_SLACK_STAGING }}"
+          fi
+          echo "channel=${CHANNEL}" >> $GITHUB_OUTPUT
+          echo "Notification Channel: ${CHANNEL}"
+
+      - name: Send Slack notification - Failure
+        run: |
+          SLACK_USER_ID="${{ steps.slack-user.outputs.slack_user_id }}"
+          CHANNEL="${{ steps.channel.outputs.channel }}"
+          
+          curl -X POST -H 'Content-type: application/json' --data "{
+            \"channel\": \"${CHANNEL}\",
+            \"attachments\": [
+              {
+                \"mrkdwn_in\": [\"text\"],
+                \"color\": \"#FF0000\",
+                \"title\": \":x: DEPLOYMENT FAILED: | ${{ env.PROJECT }} | ${{ needs.prepare.outputs.environment }}\",
+                \"fields\": [
+                  {\"title\": \"Service Name\", \"value\": \"${{ needs.prepare.outputs.service_name }}\", \"short\": true},
+                  {\"title\": \"Build Tag\", \"value\": \"${{ needs.prepare.outputs.build_tag }}\", \"short\": true},
+                  {\"title\": \"Environment\", \"value\": \"${{ needs.prepare.outputs.environment }}\", \"short\": true},
+                  {\"title\": \"Trigger\", \"value\": \"${{ github.event_name }}\", \"short\": true},
+                  {\"title\": \"Deployed by\", \"value\": \"<@${SLACK_USER_ID}> | <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Workflow Details>\", \"short\": false}
+                ]
+              }
+            ]
+          }" ${{ secrets.SLACK_WEBHOOK_URL }}
+        continue-on-error: true
+
+  # Job 7: Clean up non-production tags
+  clean_up_tag:
+    name: Clean Up Tags
+    runs-on: [self-hosted]
+    needs: [prepare, deploy]
+    if: success() && needs.prepare.outputs.environment != 'production'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Delete staging tag
+        run: |
+          TAG_TO_DELETE="${{ github.ref_name }}"
+          echo "Deleting tag: ${TAG_TO_DELETE}"
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Delete local tag
+          git tag -d "${TAG_TO_DELETE}" || true
+          
+          # Delete remote tag
+          git push origin --delete "${TAG_TO_DELETE}" || true
+          
+          echo "Tag '${TAG_TO_DELETE}' deleted successfully"
+        continue-on-error: true
   #         # Examples for traditional deployment:
   #         # - ansible-playbook deploy.yml -e "service_name=${{ env.SERVICE_NAME }} build_tag=${{ needs.prepare.outputs.build_tag }}"
 
