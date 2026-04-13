@@ -1,0 +1,124 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    tags:
+      # - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'production-*'
+      - 'staging-*'
+      - 'sre-*'
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: 'Version tag (optional, for manual versioning)'
+        required: false
+        type: string
+
+env:
+  PROJECT: BACKEND
+  DEPLOYER: ${{ github.actor }}
+  IMAGE_TAG: ${{ github.ref_name }}
+  CHANNEL_SLACK_STAGING: '#deployment-v4'
+  CHANNEL_SLACK_PRODUCTION: '#be-deployment-production'
+  APP_VERSION: ${{ github.ref_name }}
+  USER_DEPLOY: ${{ github.actor }}
+
+
+jobs:
+  # Step 1: Prepare - Extract build info and determine environment
+  prepare:
+    name: Prepare
+    uses: kumparan/workflow-templates/.github/workflows/prepare.yml@master
+    with:
+      project: BACKEND
+
+  # Step 2: Build - Build Docker image and push to ECR
+  build:
+    name: Build
+    needs: [prepare]
+    if: needs.prepare.outputs.should_deploy == 'true'
+    uses: kumparan/workflow-templates/.github/workflows/build.yml@master
+    with:
+      service_name: ${{ needs.prepare.outputs.service_name }}
+      build_tag: ${{ needs.prepare.outputs.build_tag }}
+      environment: ${{ needs.prepare.outputs.environment }}
+      should_deploy: ${{ needs.prepare.outputs.should_deploy }}
+    secrets:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+
+  # Step 3: Update Vault - Update vault secrets via helper service
+  update-vault:
+    name: Update Vault
+    needs: [prepare, build]
+    if: needs.prepare.outputs.should_deploy == 'true'
+    uses: kumparan/workflow-templates/.github/workflows/update-vault.yml@master
+    with:
+      service_name: ${{ needs.prepare.outputs.service_name }}
+      build_tag: ${{ needs.prepare.outputs.build_tag }}
+      environment: ${{ needs.prepare.outputs.environment }}
+    secrets:
+      VAULT_UPDATE_TOKEN: ${{ secrets.VAULT_UPDATE_TOKEN }}
+
+  # Step 4: Deploy - Deploy to ArgoCD or Spinnaker
+  deploy:
+    name: Deploy
+    needs: [prepare, build, update-vault]
+    if: needs.prepare.outputs.should_deploy == 'true'
+    uses: kumparan/workflow-templates/.github/workflows/deploy.yml@master
+    with:
+      service_name: ${{ needs.prepare.outputs.service_name }}
+      build_tag: ${{ needs.prepare.outputs.build_tag }}
+      environment: ${{ needs.prepare.outputs.environment }}
+      project: BACKEND
+    secrets:
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+      ARGOCD_USERNAME: ${{ secrets.ARGOCD_USERNAME }}
+      ARGOCD_PASSWORD: ${{ secrets.ARGOCD_PASSWORD }}
+      VAULT_UPDATE_TOKEN: ${{ secrets.VAULT_UPDATE_TOKEN }}
+
+  # Step 5: Notify Success - Send Slack notification on success
+  notify-success:
+    name: Notify Success
+    needs: [prepare, deploy]
+    if: success()
+    uses: kumparan/workflow-templates/.github/workflows/notify-success.yml@master
+    with:
+      service_name: ${{ needs.prepare.outputs.service_name }}
+      build_tag: ${{ needs.prepare.outputs.build_tag }}
+      environment: ${{ needs.prepare.outputs.environment }}
+      project: BACKEND
+      channel_staging: '#deployment-v4'
+      channel_production: '#be-deployment-production'
+    secrets:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # Step 6: Notify Failure - Send Slack notification on failure
+  notify-failure:
+    name: Notify Failure
+    needs: [prepare, deploy]
+    if: failure()
+    uses: kumparan/workflow-templates/.github/workflows/notify-failure.yml@master
+    with:
+      service_name: ${{ needs.prepare.outputs.service_name }}
+      build_tag: ${{ needs.prepare.outputs.build_tag }}
+      environment: ${{ needs.prepare.outputs.environment }}
+      project: BACKEND
+      channel_staging: '#deployment-v4'
+      channel_production: '#be-deployment-production'
+    secrets:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # Step 7: Clean Up - Delete non-production tags after successful deployment
+  clean-up-tag:
+    name: Clean Up Tags
+    needs: [prepare, deploy]
+    if: success()
+    uses: kumparan/workflow-templates/.github/workflows/clean-up-tag.yml@master
+    with:
+      environment: ${{ needs.prepare.outputs.environment }}
