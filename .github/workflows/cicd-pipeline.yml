@@ -1,17 +1,13 @@
-name: cicd-pipeline
+name: CI/CD Pipeline - Using Universal Template
 
-# CI/CD Pipeline for GitHub Actions
+# CI/CD Pipeline using reusable workflows from workflow-templates
 # Triggers: tag push (v*.*.*, production-*, staging-*, sre-*), manual trigger
-# Runs on self-hosted runner with jobs: prepare, build, update vault, deploy
-# Environment: production (for v*.*.* or production-* tags), staging (for staging-* or sre-* tags)
+# All jobs are defined as reusable workflows in kumparan/workflow-templates
 
 on:
-  # pull_request:
-  #   types: [closed]
-  #   branches:
-  #     - master
   push:
     tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
       - 'production-*'
       - 'staging-*'
       - 'sre-*'
@@ -23,585 +19,103 @@ on:
         type: string
 
 env:
-  PROJECT: "BACKEND"
+  PROJECT: BACKEND
   DEPLOYER: ${{ github.actor }}
   IMAGE_TAG: ${{ github.ref_name }}
-  ENV: "staging"
-  # AWS_CONFIG_DIR: "$CI_PROJECT_DIR/.aws"
-
-  ### Notification Channel Slack
-  CHANNEL_SLACK_STAGING: "#deployment-v4"
-  CHANNEL_SLACK_PRODUCTION: "#be-deployment-production"
+  CHANNEL_SLACK_STAGING: '#deployment-v4'
+  CHANNEL_SLACK_PRODUCTION: '#be-deployment-production'
   APP_VERSION: ${{ github.ref_name }}
   USER_DEPLOY: ${{ github.actor }}
 
+
 jobs:
-  # Job 1: Preparation stage - setup environment, validate configs
+  # Step 1: Prepare - Extract build info and determine environment
   prepare:
-    name: Preparing Deployment - ${{ github.ref_name }}
-    runs-on: [self-hosted]
-    outputs:
-      build_tag: ${{ steps.tag.outputs.build_tag }}
-      should_deploy: ${{ steps.check.outputs.should_deploy }}
-      service_name: ${{ steps.service.outputs.service_name }}
-      environment: ${{ steps.env.outputs.environment }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    uses: kumparan/workflow-templates/.github/workflows/prepare.yml@master
+    with:
+      project: ${{ env.PROJECT }}
 
-      - name: Extract service name from repository
-        id: service
-        run: |
-          SERVICE_NAME="${{ github.repository }}"
-          SERVICE_NAME="${SERVICE_NAME##*/}"
-          SERVICE_NAME="${SERVICE_NAME}-service"
-          echo "service_name=${SERVICE_NAME}" >> $GITHUB_OUTPUT
-          echo "Service name: ${SERVICE_NAME}"
-
-      - name: Determine build tag
-        id: tag
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.version_tag }}" ]]; then
-            BUILD_TAG="${{ github.event.inputs.version_tag }}"
-          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            BUILD_TAG="$(echo "${{ github.ref }}" | sed 's|refs/tags/||')"
-          else
-            BUILD_TAG="${{ github.sha }}"
-          fi
-          echo "build_tag=${BUILD_TAG}" >> $GITHUB_OUTPUT
-          echo "Build tag: ${BUILD_TAG}"
-
-      - name: Determine environment
-        id: env
-        run: |
-          BUILD_TAG="${{ steps.tag.outputs.build_tag }}"
-          
-          # Check if tag matches semantic versioning pattern v*.*.* or production-*
-          if [[ ${BUILD_TAG} =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ ${BUILD_TAG} =~ ^production- ]]; then
-            ENVIRONMENT="production"
-          else
-            ENVIRONMENT="staging"
-          fi
-          
-          echo "environment=${ENVIRONMENT}" >> $GITHUB_OUTPUT
-          echo "Environment: ${ENVIRONMENT}"
-
-      - name: Check deployment conditions
-        id: check
-        run: |
-          DEPLOY=false
-          
-          # Deploy on PR merge to master
-          if [[ "${{ github.event_name }}" == "pull_request" && "${{ github.event.pull_request.merged }}" == "true" && "${{ github.base_ref }}" == "master" ]]; then
-            DEPLOY=true
-            echo "Deployment triggered: PR merged to master"
-          fi
-          
-          # Deploy on staging-*, production-*, sre-* tags or semantic version tags
-          if [[ "${{ github.ref }}" == refs/tags/staging-* || "${{ github.ref }}" == refs/tags/production-* || "${{ github.ref }}" == refs/tags/sre-* || "${{ github.ref }}" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            DEPLOY=true
-            echo "Deployment triggered: Tag push (staging-*, production-*, sre-* or v*.*.* version tags)"
-          fi
-          
-          # Manual trigger
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            DEPLOY=true
-            echo "Deployment triggered: Manual workflow_dispatch"
-          fi
-          
-          echo "should_deploy=${DEPLOY}" >> $GITHUB_OUTPUT
-
-      - name: Validate environment
-        run: |
-          echo "Validation: Checking environment setup..."
-          env | sort
-
-  # Job 2: Build stage - compile, test, build artifacts
+  # Step 2: Build - Build Docker image and push to ECR
   build:
-    name: Build
-    runs-on: [self-hosted]
     needs: [prepare]
-    env:
-      SERVICE_NAME: ${{ needs.prepare.outputs.service_name }}
-      BUILD_TAG: ${{ needs.prepare.outputs.build_tag }}
-      ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    if: needs.prepare.outputs.should_deploy == 'true'
+    uses: kumparan/workflow-templates/.github/workflows/build.yml@master
+    with:
+      service_name: ${{ needs.prepare.outputs.service_name }}
+      build_tag: ${{ needs.prepare.outputs.build_tag }}
+      environment: ${{ needs.prepare.outputs.environment }}
+      should_deploy: ${{ needs.prepare.outputs.should_deploy }}
+    secrets:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
-
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v1
-
-      - name: Build Docker image
-        if: needs.prepare.outputs.should_deploy == 'true'
-        run: |
-          BUILD_TAG="${{ needs.prepare.outputs.build_tag }}"
-          SERVICE_NAME="${{ needs.prepare.outputs.service_name }}"
-          AWS_ACCOUNT_ID="${{ secrets.AWS_ACCOUNT_ID }}"
-          AWS_REGION="${{ secrets.AWS_DEFAULT_REGION }}"
-          
-          IMAGE_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${SERVICE_NAME}:${BUILD_TAG}"
-          
-          echo "Building Docker image: ${IMAGE_REGISTRY}"
-          docker build -t "${IMAGE_REGISTRY}" .
-          docker push "${IMAGE_REGISTRY}"
-          echo "image=${IMAGE_REGISTRY}" >> $GITHUB_OUTPUT
-
-  # Job 3: Update Vault - store secrets and configuration
+  # Step 3: Update Vault - Update vault secrets via helper service
   update-vault:
-    name: Update Vault
-    runs-on: [self-hosted]
     needs: [prepare, build]
     if: needs.prepare.outputs.should_deploy == 'true'
-    env:
-      SERVICE_NAME: ${{ needs.prepare.outputs.service_name }}
-      ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
-      BUILD_TAG: ${{ needs.prepare.outputs.build_tag }}
-    steps:
-      - name: Update Vault secret
-        run: |
-          set -xe
-          echo "Updating Vault secret..."
-          
-          # Wait for helper service to be ready
-          c=0
-          STATUS=0
-          while [ $STATUS != 200 ]; do
-            sleep 5
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://helper.kumpar.com/ping || true)
-            echo "Helper service status: $STATUS"
-            ((c++)) && ((c==3)) && exit 1
-          done
-          
-          # Call helper service to update vault
-          curl --location 'http://helper.kumpar.com/bash' \
-            --header 'Content-Type: application/json' \
-            --data-raw "{
-                \"user\": \"kresno.hadinata@kumparan.com\",
-                \"token\": \"${{ secrets.VAULT_UPDATE_TOKEN }}\",
-                \"additional\": {
-                  \"flag\": \"updateVaultSecretjenkins\",
-                  \"environment\": \"${{ env.ENVIRONMENT }}\",
-                  \"servicename\": \"${{ env.SERVICE_NAME }}\",
-                  \"target\": \"${{ github.run_id }}\"
-                }
-            }"
-          
-          echo "Vault secret updated successfully"
+    uses: kumparan/workflow-templates/.github/workflows/update-vault.yml@master
+    with:
+      service_name: ${{ needs.prepare.outputs.service_name }}
+      build_tag: ${{ needs.prepare.outputs.build_tag }}
+      environment: ${{ needs.prepare.outputs.environment }}
+    secrets:
+      VAULT_UPDATE_TOKEN: ${{ secrets.VAULT_UPDATE_TOKEN }}
 
-  # Job 4: Deploy stage - deploy to environments
+  # Step 4: Deploy - Deploy to ArgoCD or Spinnaker
   deploy:
-    name: Deploy
-    runs-on: [self-hosted]
     needs: [prepare, build, update-vault]
     if: needs.prepare.outputs.should_deploy == 'true'
-    env:
-      SERVICE_NAME: ${{ needs.prepare.outputs.service_name }}
-      ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
-      BUILD_TAG: ${{ needs.prepare.outputs.build_tag }}
-      IMAGE_TAG: ${{ needs.prepare.outputs.build_tag }}
-      ARGOCD_URL: argocd-dashboard.kumpar.com
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+    uses: kumparan/workflow-templates/.github/workflows/deploy.yml@master
+    with:
+      service_name: ${{ needs.prepare.outputs.service_name }}
+      build_tag: ${{ needs.prepare.outputs.build_tag }}
+      environment: ${{ needs.prepare.outputs.environment }}
+      project: ${{ env.PROJECT }}
+    secrets:
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+      ARGOCD_USERNAME: ${{ secrets.ARGOCD_USERNAME }}
+      ARGOCD_PASSWORD: ${{ secrets.ARGOCD_PASSWORD }}
+      VAULT_UPDATE_TOKEN: ${{ secrets.VAULT_UPDATE_TOKEN }}
 
-      - name: Setup ArgoCD CLI
-        run: |
-          sudo mkdir -p /usr/local/bin
-          sudo curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
-          sudo chmod +x /usr/local/bin/argocd
-          /usr/local/bin/argocd version --short || echo "ArgoCD CLI installed successfully"
-
-      - name: Deploy to ArgoCD
-        run: |
-          set -xe
-          
-          # Helper function for health checks
-          check_ping() {
-            local retries=0
-            local max_retries=3
-            local status=000
-
-            while [ "$status" != "200" ]; do
-              sleep 5
-              status=$(curl -s -o /dev/null -w "%{http_code}" http://helper.kumpar.com/ping || true)
-              echo "Ping status: $status"
-              ((retries++))
-              if [[ "$retries" -ge "$max_retries" ]]; then
-                echo "Failed after $max_retries attempts to reach helper service"
-                exit 1
-              fi
-            done
-          }
-
-          # Helper function for vault rollback
-          trigger_rollback() {
-            check_ping
-            echo "Triggering rollback for vault secret"
-
-            if [[ "${{ env.ENVIRONMENT }}" == "production" ]]; then
-              curl --location 'http://helper.kumpar.com/bash' \
-                --header "Content-Type: application/json" \
-                --data-raw "{
-                  \"user\":\"kresno.hadinata@kumparan.com\",
-                  \"token\":\"${{ secrets.VAULT_UPDATE_TOKEN }}\",
-                  \"additional\":{
-                    \"flag\":\"updateVaultSecretjenkins\",
-                    \"environment\":\"${{ env.ENVIRONMENT }}\",
-                    \"servicename\":\"${{ env.SERVICE_NAME }}\",
-                    \"target\":\"${{ github.run_id }}\"
-                  }
-                }"
-            else
-              curl --location 'http://helper.kumpar.com/bash' \
-                --header "Content-Type: application/json" \
-                --data-raw "{
-                  \"user\":\"kresno.hadinata@kumparan.com\",
-                  \"token\":\"${{ secrets.VAULT_UPDATE_TOKEN }}\",
-                  \"additional\":{
-                    \"flag\":\"rollbackVaultSecret\",
-                    \"environment\":\"${{ env.ENVIRONMENT }}\",
-                    \"servicename\":\"${{ env.SERVICE_NAME }}\",
-                    \"target\":\"${{ github.run_id }}\"
-                  }
-                }"
-            fi
-            exit 1
-          }
-
-          # Helper function for updating helm parameters
-          update_helm_param() {
-            local app_name="$1"
-            local param_name="$2"
-            local image="$3"
-
-            argocd app get "$app_name" -o json \
-            | jq -r --arg param "$param_name" '
-                .spec.sources
-                | to_entries[]
-                | select(.value.helm != null)
-                | select(.value.helm.parameters // [] | any(.name == $param))
-                | (.key + 1)
-              ' \
-            | while read -r pos; do
-                echo "→ source-position $pos set ${param_name}=${image}"
-                argocd app set "$app_name" \
-                  --source-position "$pos" \
-                  --helm-set "${param_name}=${image}"
-              done
-          }
-
-          # ArgoCD login
-          argocd login ${{ env.ARGOCD_URL }} --grpc-web \
-            --username ${{ secrets.ARGOCD_USERNAME }} \
-            --password ${{ secrets.ARGOCD_PASSWORD }} \
-            --insecure
-
-          SERVICE_NAME_ARGOCD="${{ env.SERVICE_NAME }}-${{ env.ENVIRONMENT }}"
-          CRONJOB_DEPLOYMENT=("rapor-menteri")
-          
-          # Build full image registry
-          AWS_ACCOUNT_ID="${{ secrets.AWS_ACCOUNT_ID }}"
-          AWS_REGION="${{ secrets.AWS_DEFAULT_REGION }}"
-          IMAGE_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${{ env.SERVICE_NAME }}:${{ env.BUILD_TAG }}"
-
-          echo "Checking ArgoCD application: $SERVICE_NAME_ARGOCD"
-          
-          if argocd app get $SERVICE_NAME_ARGOCD >/dev/null 2>&1; then
-            echo "Service $SERVICE_NAME_ARGOCD found in ArgoCD"
-            echo "Updating image tag parameter to: $IMAGE_REGISTRY"
-            
-            if [[ " ${CRONJOB_DEPLOYMENT[*]} " =~ " ${{ env.SERVICE_NAME }} " ]]; then
-              echo "Service includes deployment + cronjob"
-              update_helm_param "$SERVICE_NAME_ARGOCD" "deployment.image" "$IMAGE_REGISTRY"
-              update_helm_param "$SERVICE_NAME_ARGOCD" "cronjob.image" "$IMAGE_REGISTRY"
-            else
-              echo "Service deployment only"
-              update_helm_param "$SERVICE_NAME_ARGOCD" "deployment.image" "$IMAGE_REGISTRY"
-            fi
-
-            sleep 15
-
-            echo "Syncing application: $SERVICE_NAME_ARGOCD"
-            argocd app sync $SERVICE_NAME_ARGOCD
-
-            sleep 10
-
-            # Wait for deployment with retry logic
-            TIMEOUT=1800
-            MAX_RETRIES=5
-            RETRY_COUNT=0
-            DEPLOY_SUCCESS=0
-
-            while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-              if argocd app wait $SERVICE_NAME_ARGOCD \
-                --timeout $TIMEOUT \
-                --health \
-                --sync; then
-                
-                echo "ArgoCD deployment successful!"
-                DEPLOY_SUCCESS=1
-                break
-              else
-                echo "Deployment attempt $((RETRY_COUNT + 1)) failed"
-
-                HEALTH=$(argocd app get $SERVICE_NAME_ARGOCD -o json | jq -r '.status.health.status')
-                ERROR_MSG=$(argocd app get $SERVICE_NAME_ARGOCD -o json | jq -r '.status.health.message // "Unknown error"')
-                
-                if [ "$HEALTH" = "Degraded" ]; then
-                  echo "Deployment Failed with Degraded status!"
-                  DEPLOY_SUCCESS=2
-                  break
-                fi
-                
-                RETRY_COUNT=$((RETRY_COUNT + 1))
-                
-                if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-                  echo "Retrying in 30 seconds..."
-                  sleep 30
-                fi
-              fi
-            done
-
-            if [ $DEPLOY_SUCCESS -eq 1 ]; then
-              echo "ArgoCD deployment finished successfully."
-            elif [ $DEPLOY_SUCCESS -eq 2 ]; then
-              echo "ArgoCD deployment failed with Degraded status."
-              trigger_rollback
-            else
-              echo "ArgoCD deployment timeout after $MAX_RETRIES attempts!"
-              trigger_rollback
-            fi
-          else
-            echo "Service $SERVICE_NAME_ARGOCD not found in ArgoCD, using Spinnaker fallback"
-            
-            # Call webhook to get callback URL
-            resp=$(curl -s -X POST https://dhook-api.kumpar.com/webhook \
-              -H "Content-Type: application/json" \
-              -d "{\"webhookId\": \"${SERVICE_NAME_ARGOCD}\"}")
-            
-            uuid=$(echo "$resp" | jq -r '.uuid')
-            callbackUrl="https://dhook-api.kumpar.com/callback/$uuid"
-            echo "Generated Callback URL: $callbackUrl"
-
-            if [ -z "$uuid" ] || [ "$uuid" = "null" ]; then
-              echo "Failed to get UUID from webhook"
-              trigger_rollback
-            fi
-
-            # Trigger Spinnaker deployment
-            curl -X POST \
-              https://spinnaker-api.kumparan.com/webhooks/webhook/${SERVICE_NAME_ARGOCD} \
-              -H 'cache-control: no-cache' \
-              -H 'content-type: application/json' \
-              -d "{
-                \"artifacts\": [
-                  {
-                    \"type\": \"docker/image\",
-                    \"name\": \"${IMAGE_REGISTRY%:*}\",
-                    \"version\": \"${{ env.BUILD_TAG }}\",
-                    \"reference\": \"${IMAGE_REGISTRY}\"
-                  }
-                ],
-                \"parameters\": {
-                  \"callback\": \"${callbackUrl}\"
-                }
-              }"
-
-            echo "Waiting for Spinnaker deployment callback"
-            wait_resp=$(curl -s "https://dhook-api.kumpar.com/wait/$uuid")
-            
-            if echo "$wait_resp" | jq empty > /dev/null 2>&1; then
-              status=$(echo "$wait_resp" | jq -r '.status // empty')
-              echo "Received status: $status"
-            else
-              echo "Invalid JSON response: $wait_resp"
-              trigger_rollback
-            fi
-
-            # Validate deployment status
-            if [ "$status" != "succeeded" ]; then
-              echo "Spinnaker deployment status is not 'succeeded'. Triggering rollback"
-              trigger_rollback
-            fi
-          fi
-
-      - name: Log deployment history
-        if: always()
-        run: |
-          echo "Logging deployment history..."
-          curl -m 10 --location --request POST 'http://10.0.5.67:8000/api/v1/history/insert' \
-            --header 'Content-Type: application/json' \
-            --data-raw "{
-                \"image\":\"${{ env.BUILD_TAG }}\",
-                \"deployment_name\":\"${{ env.SERVICE_NAME }}\",
-                \"service\":\"${{ env.SERVICE_NAME }}\",
-                \"environment\":\"${{ env.ENVIRONMENT }}\",
-                \"user_email\":\"sre@kumparan.com\"
-            }" || true
-          echo "Deployment history logged"
-
-  # Job 5: Notification on success
-  notif_success:
-    name: Notify Success
-    runs-on: [self-hosted]
+  # Step 5: Notify Success - Send Slack notification on success
+  notify-success:
     needs: [prepare, deploy]
     if: success()
-    steps:
-      - name: Determine email for Slack
-        id: email
-        run: |
-          if [[ "${{ needs.prepare.outputs.environment }}" == "production" && "${{ github.ref_name }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            EMAIL="${{ github.actor }}"
-          elif [[ "${{ github.ref_name }}" =~ production ]]; then
-            EMAIL="${{ github.actor }}"
-          else
-            EMAIL="${{ github.actor }}"
-          fi
-          echo "email=${EMAIL}" >> $GITHUB_OUTPUT
+    uses: kumparan/workflow-templates/.github/workflows/notify-success.yml@master
+    with:
+      service_name: ${{ needs.prepare.outputs.service_name }}
+      build_tag: ${{ needs.prepare.outputs.build_tag }}
+      environment: ${{ needs.prepare.outputs.environment }}
+      project: ${{ env.PROJECT }}
+      channel_staging: ${{ env.CHANNEL_SLACK_STAGING }}
+      channel_production: ${{ env.CHANNEL_SLACK_PRODUCTION }}
+    secrets:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
-      - name: Get Slack user ID
-        id: slack-user
-        run: |
-          SLACK_USER_ID=$(curl -s \
-            -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
-            "https://slack.com/api/users.lookupByEmail?email=${{ steps.email.outputs.email }}" \
-            | jq -r '.user.id // "unknown"')
-          echo "slack_user_id=${SLACK_USER_ID}" >> $GITHUB_OUTPUT
-          echo "Slack User ID: ${SLACK_USER_ID}"
-
-      - name: Prepare notification channel
-        id: channel
-        run: |
-          if [[ "${{ needs.prepare.outputs.environment }}" == "production" ]]; then
-            CHANNEL="${{ env.CHANNEL_SLACK_PRODUCTION }}"
-          else
-            CHANNEL="${{ env.CHANNEL_SLACK_STAGING }}"
-          fi
-          echo "channel=${CHANNEL}" >> $GITHUB_OUTPUT
-          echo "Notification Channel: ${CHANNEL}"
-
-      - name: Send Slack notification - Success
-        run: |
-          SLACK_USER_ID="${{ steps.slack-user.outputs.slack_user_id }}"
-          CHANNEL="${{ steps.channel.outputs.channel }}"
-          
-          curl -X POST -H 'Content-type: application/json' --data "{
-            \"channel\": \"${CHANNEL}\",
-            \"attachments\": [
-              {
-                \"mrkdwn_in\": [\"text\"],
-                \"color\": \"#36a64f\",
-                \"title\": \":white_check_mark: DEPLOYMENT SUCCEEDED: | ${{ needs.prepare.outputs.service_name }} | ${{ needs.prepare.outputs.environment }}\",
-                \"fields\": [
-                  {\"title\": \"Project Name\", \"value\": \"${{ github.repository }}\", \"short\": true},
-                  {\"title\": \"Branch/Tag/Version\", \"value\": \"${{ needs.prepare.outputs.build_tag }}\", \"short\": true},
-                  {\"title\": \"Environment\", \"value\": \"${{ needs.prepare.outputs.environment }}\", \"short\": true},
-                  {\"title\": \"Trigger\", \"value\": \"${{ github.event_name }}\", \"short\": true},
-                  {\"title\": \"Deployed by\", \"value\": \"<@${SLACK_USER_ID}> | <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Workflow Details>\", \"short\": false}
-                ]
-              }
-            ]
-          }" ${{ secrets.SLACK_WEBHOOK_URL }}
-        continue-on-error: true
-
-  # Job 6: Notification on failure
-  notif_failure:
-    name: Notify Failure
-    runs-on: [self-hosted]
+  # Step 6: Notify Failure - Send Slack notification on failure
+  notify-failure:
     needs: [prepare, deploy]
     if: failure()
-    steps:
-      - name: Determine email for Slack
-        id: email
-        run: |
-          if [[ "${{ needs.prepare.outputs.environment }}" == "production" && "${{ github.ref_name }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            EMAIL="${{ github.actor }}"
-          elif [[ "${{ github.ref_name }}" =~ production ]]; then
-            EMAIL="${{ github.actor }}"
-          else
-            EMAIL="${{ github.actor }}"
-          fi
-          echo "email=${EMAIL}" >> $GITHUB_OUTPUT
+    uses: kumparan/workflow-templates/.github/workflows/notify-failure.yml@master
+    with:
+      service_name: ${{ needs.prepare.outputs.service_name }}
+      build_tag: ${{ needs.prepare.outputs.build_tag }}
+      environment: ${{ needs.prepare.outputs.environment }}
+      project: ${{ env.PROJECT }}
+      channel_staging: ${{ env.CHANNEL_SLACK_STAGING }}
+      channel_production: ${{ env.CHANNEL_SLACK_PRODUCTION }}
+    secrets:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
-      - name: Get Slack user ID
-        id: slack-user
-        run: |
-          SLACK_USER_ID=$(curl -s \
-            -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
-            "https://slack.com/api/users.lookupByEmail?email=${{ steps.email.outputs.email }}" \
-            | jq -r '.user.id // "unknown"')
-          echo "slack_user_id=${SLACK_USER_ID}" >> $GITHUB_OUTPUT
-          echo "Slack User ID: ${SLACK_USER_ID}"
-
-      - name: Prepare notification channel
-        id: channel
-        run: |
-          if [[ "${{ needs.prepare.outputs.environment }}" == "production" ]]; then
-            CHANNEL="${{ env.CHANNEL_SLACK_PRODUCTION }}"
-          else
-            CHANNEL="${{ env.CHANNEL_SLACK_STAGING }}"
-          fi
-          echo "channel=${CHANNEL}" >> $GITHUB_OUTPUT
-          echo "Notification Channel: ${CHANNEL}"
-
-      - name: Send Slack notification - Failure
-        run: |
-          SLACK_USER_ID="${{ steps.slack-user.outputs.slack_user_id }}"
-          CHANNEL="${{ steps.channel.outputs.channel }}"
-          
-          curl -X POST -H 'Content-type: application/json' --data "{
-            \"channel\": \"${CHANNEL}\",
-            \"attachments\": [
-              {
-                \"mrkdwn_in\": [\"text\"],
-                \"color\": \"#FF0000\",
-                \"title\": \":x: DEPLOYMENT FAILED: | ${{ needs.prepare.outputs.service_name }} | ${{ needs.prepare.outputs.environment }}\",
-                \"fields\": [
-                  {\"title\": \"Project Name\", \"value\": \"${{ github.repository }}\", \"short\": true},
-                  {\"title\": \"Branch/Tag/Version\", \"value\": \"${{ needs.prepare.outputs.build_tag }}\", \"short\": true},
-                  {\"title\": \"Environment\", \"value\": \"${{ needs.prepare.outputs.environment }}\", \"short\": true},
-                  {\"title\": \"Trigger\", \"value\": \"${{ github.event_name }}\", \"short\": true},
-                  {\"title\": \"Deployed by\", \"value\": \"<@${SLACK_USER_ID}> | <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Workflow Details>\", \"short\": false}
-                ]
-              }
-            ]
-          }" ${{ secrets.SLACK_WEBHOOK_URL }}
-        continue-on-error: true
-
-  # Job 7: Clean up non-production tags
-  clean_up_tag:
-    name: Clean Up Tags
-    runs-on: [self-hosted]
+  # Step 7: Clean Up - Delete non-production tags after successful deployment
+  clean-up-tag:
     needs: [prepare, deploy]
-    if: success() && needs.prepare.outputs.environment != 'production'
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Delete staging tag
-        run: |
-          TAG_TO_DELETE="${{ github.ref_name }}"
-          echo "Deleting tag: ${TAG_TO_DELETE}"
-          
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Delete local tag
-          git tag -d "${TAG_TO_DELETE}" || true
-          
-          # Delete remote tag
-          git push origin --delete "${TAG_TO_DELETE}" || true
-          
-          echo "Tag '${TAG_TO_DELETE}' deleted successfully"
-        continue-on-error: true
+    if: success()
+    uses: kumparan/workflow-templates/.github/workflows/clean-up-tag.yml@master
+    with:
+      environment: ${{ needs.prepare.outputs.environment }}
