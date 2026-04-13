@@ -216,9 +216,10 @@ jobs:
 
       - name: Setup ArgoCD CLI
         run: |
-          curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
-          chmod +x /usr/local/bin/argocd
-          echo "ArgoCD CLI installed successfully"
+          sudo mkdir -p /usr/local/bin
+          sudo curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          sudo chmod +x /usr/local/bin/argocd
+          /usr/local/bin/argocd version --short || echo "ArgoCD CLI installed successfully"
 
       - name: Deploy to ArgoCD
         run: |
@@ -500,10 +501,10 @@ jobs:
               {
                 \"mrkdwn_in\": [\"text\"],
                 \"color\": \"#36a64f\",
-                \"title\": \":white_check_mark: DEPLOYMENT SUCCEEDED: | ${{ env.PROJECT }} | ${{ needs.prepare.outputs.environment }}\",
+                \"title\": \":white_check_mark: DEPLOYMENT SUCCEEDED: | ${{ needs.prepare.outputs.service_name }} | ${{ needs.prepare.outputs.environment }}\",
                 \"fields\": [
-                  {\"title\": \"Service Name\", \"value\": \"${{ needs.prepare.outputs.service_name }}\", \"short\": true},
-                  {\"title\": \"Build Tag\", \"value\": \"${{ needs.prepare.outputs.build_tag }}\", \"short\": true},
+                  {\"title\": \"Project Name\", \"value\": \"${{ github.repository }}\", \"short\": true},
+                  {\"title\": \"Branch/Tag/Version\", \"value\": \"${{ needs.prepare.outputs.build_tag }}\", \"short\": true},
                   {\"title\": \"Environment\", \"value\": \"${{ needs.prepare.outputs.environment }}\", \"short\": true},
                   {\"title\": \"Trigger\", \"value\": \"${{ github.event_name }}\", \"short\": true},
                   {\"title\": \"Deployed by\", \"value\": \"<@${SLACK_USER_ID}> | <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Workflow Details>\", \"short\": false}
@@ -564,10 +565,10 @@ jobs:
               {
                 \"mrkdwn_in\": [\"text\"],
                 \"color\": \"#FF0000\",
-                \"title\": \":x: DEPLOYMENT FAILED: | ${{ env.PROJECT }} | ${{ needs.prepare.outputs.environment }}\",
+                \"title\": \":x: DEPLOYMENT FAILED: | ${{ needs.prepare.outputs.service_name }} | ${{ needs.prepare.outputs.environment }}\",
                 \"fields\": [
-                  {\"title\": \"Service Name\", \"value\": \"${{ needs.prepare.outputs.service_name }}\", \"short\": true},
-                  {\"title\": \"Build Tag\", \"value\": \"${{ needs.prepare.outputs.build_tag }}\", \"short\": true},
+                  {\"title\": \"Project Name\", \"value\": \"${{ github.repository }}\", \"short\": true},
+                  {\"title\": \"Branch/Tag/Version\", \"value\": \"${{ needs.prepare.outputs.build_tag }}\", \"short\": true},
                   {\"title\": \"Environment\", \"value\": \"${{ needs.prepare.outputs.environment }}\", \"short\": true},
                   {\"title\": \"Trigger\", \"value\": \"${{ github.event_name }}\", \"short\": true},
                   {\"title\": \"Deployed by\", \"value\": \"<@${SLACK_USER_ID}> | <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Workflow Details>\", \"short\": false}
@@ -605,25 +606,3 @@ jobs:
           
           echo "Tag '${TAG_TO_DELETE}' deleted successfully"
         continue-on-error: true
-  #         # Examples for traditional deployment:
-  #         # - ansible-playbook deploy.yml -e "service_name=${{ env.SERVICE_NAME }} build_tag=${{ needs.prepare.outputs.build_tag }}"
-
-  #     - name: Verify deployment
-  #       run: |
-  #         echo "Verifying deployment..."
-  #         # Add health checks and verification commands
-  #         # Examples:
-  #         # - kubectl rollout status deployment/${{ env.SERVICE_NAME }} -n default
-  #         # - curl -f http://localhost/health || exit 1
-
-  #     - name: Notify deployment status
-  #       if: always()
-  #       run: |
-  #         STATUS=${{ job.status }}
-  #         REPO="${{ github.repository }}"
-  #         BRANCH="${{ github.ref_name }}"
-  #         SERVICE="${{ env.SERVICE_NAME }}"
-  #         BUILD_TAG="${{ needs.prepare.outputs.build_tag }}"
-  #         echo "Deployment ${STATUS} - Service: ${SERVICE}, Branch: ${BRANCH}, Build: ${BUILD_TAG}"
-  #         # Add notification commands (Slack, email, etc.)
-    
