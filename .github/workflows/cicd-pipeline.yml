@@ -33,7 +33,7 @@ jobs:
   prepare:
     uses: kumparan/workflow-templates/.github/workflows/prepare.yml@master
     with:
-      project: ${{ env.PROJECT }}
+      project: BACKEND
 
   # Step 2: Build - Build Docker image and push to ECR
   build:
@@ -72,7 +72,7 @@ jobs:
       service_name: ${{ needs.prepare.outputs.service_name }}
       build_tag: ${{ needs.prepare.outputs.build_tag }}
       environment: ${{ needs.prepare.outputs.environment }}
-      project: ${{ env.PROJECT }}
+      project: BACKEND
     secrets:
       AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
       AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
@@ -89,9 +89,9 @@ jobs:
       service_name: ${{ needs.prepare.outputs.service_name }}
       build_tag: ${{ needs.prepare.outputs.build_tag }}
       environment: ${{ needs.prepare.outputs.environment }}
-      project: ${{ env.PROJECT }}
-      channel_staging: ${{ env.CHANNEL_SLACK_STAGING }}
-      channel_production: ${{ env.CHANNEL_SLACK_PRODUCTION }}
+      project: BACKEND
+      channel_staging: '#deployment-v4'
+      channel_production: '#be-deployment-production'
     secrets:
       SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -105,9 +105,9 @@ jobs:
       service_name: ${{ needs.prepare.outputs.service_name }}
       build_tag: ${{ needs.prepare.outputs.build_tag }}
       environment: ${{ needs.prepare.outputs.environment }}
-      project: ${{ env.PROJECT }}
-      channel_staging: ${{ env.CHANNEL_SLACK_STAGING }}
-      channel_production: ${{ env.CHANNEL_SLACK_PRODUCTION }}
+      project: BACKEND
+      channel_staging: '#deployment-v4'
+      channel_production: '#be-deployment-production'
     secrets:
       SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
